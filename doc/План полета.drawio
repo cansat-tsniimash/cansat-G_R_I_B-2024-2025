@@ -256,8 +256,8 @@
         <mxCell id="BEybLAtCmw5lqT1kiuZ2-101" value="Спуск" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;" parent="1" vertex="1">
           <mxGeometry x="610" y="300" width="60" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="BEybLAtCmw5lqT1kiuZ2-102" value="Сброс&lt;br&gt;&quot;удобрений&lt;br&gt;Включение датчиков&quot;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;" parent="1" vertex="1">
-          <mxGeometry x="750" y="600" width="60" height="30" as="geometry" />
+        <mxCell id="BEybLAtCmw5lqT1kiuZ2-102" value="Выброс&lt;div&gt;груза&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;" parent="1" vertex="1">
+          <mxGeometry x="735" y="585" width="90" height="30" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
