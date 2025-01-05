@@ -1,6 +1,6 @@
 <mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/25.0.2 Chrome/128.0.6613.186 Electron/32.2.5 Safari/537.36" version="25.0.2" pages="2">
   <diagram name="Страница — 1" id="MXP7bwhcoZ6_q750zcEk">
-    <mxGraphModel dx="2048" dy="1992" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" background="none" math="0" shadow="0">
+    <mxGraphModel dx="3047" dy="2665" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" background="none" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -142,7 +142,7 @@
         <mxCell id="z32nG9epqkcoV06s47dh-1" value="Датчик&#xa;метана&#xa;MQ-4" style="text;align=center;verticalAlign=middle;rounded=0;fontColor=#000000;fontSize=39;fontStyle=1;" parent="1" vertex="1">
           <mxGeometry x="528.75" y="833.0000000000001" width="245.08" height="165.23" as="geometry" />
         </mxCell>
-        <mxCell id="kIniZEOkb3aOCgTGP6y0-58" value="Цифровой&#xa;акселерометр&#xa;и гироскоп&#xa;LSM6DSLTR" style="text;align=center;verticalAlign=middle;rounded=0;fontColor=#000000;fontSize=39;fontStyle=1;whiteSpace=wrap;" parent="1" vertex="1">
+        <mxCell id="kIniZEOkb3aOCgTGP6y0-58" value="Цифровой&#xa;акселерометр&#xa;и гироскоп&#xa;LSM6DS3" style="text;align=center;verticalAlign=middle;rounded=0;fontColor=#000000;fontSize=39;fontStyle=1;whiteSpace=wrap;" parent="1" vertex="1">
           <mxGeometry x="892" y="571.23" width="360" height="59.77" as="geometry" />
         </mxCell>
         <mxCell id="Bm7YobKzNR2c8pKCgmJU-5" value="" style="shape=image;verticalLabelPosition=bottom;labelBackgroundColor=default;verticalAlign=top;aspect=fixed;imageAspect=0;image=https://telemento.ru/images/ar300621-01.jpg;clipPath=inset(24% 18% 27% 61.33%);" parent="1" vertex="1">

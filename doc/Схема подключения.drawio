@@ -88,7 +88,7 @@
         <mxCell id="8p4VvbYaM6807nQAidC3-40" value="LIS3MDL" style="text;align=center;verticalAlign=middle;rounded=0;fontColor=#000000;fontStyle=1;whiteSpace=wrap;fontSize=20;labelBackgroundColor=none;" parent="1" vertex="1">
           <mxGeometry x="469.32000000000005" y="889.5" width="87" height="45" as="geometry" />
         </mxCell>
-        <mxCell id="8p4VvbYaM6807nQAidC3-42" value="&lt;span style=&quot;text-align: left; white-space-collapse: preserve;&quot;&gt;&lt;font face=&quot;Helvetica&quot;&gt;LSM6D&lt;/font&gt;&lt;/span&gt;&lt;span style=&quot;text-align: left; white-space-collapse: preserve;&quot;&gt;SLTR&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontStyle=1;fontColor=#000000;fontSize=20;labelBackgroundColor=none;" parent="1" vertex="1">
+        <mxCell id="8p4VvbYaM6807nQAidC3-42" value="&lt;span style=&quot;text-align: left; white-space-collapse: preserve;&quot;&gt;&lt;font face=&quot;Helvetica&quot;&gt;LSM6D&lt;/font&gt;&lt;/span&gt;&lt;span style=&quot;text-align: left; white-space-collapse: preserve;&quot;&gt;S3&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontStyle=1;fontColor=#000000;fontSize=20;labelBackgroundColor=none;" parent="1" vertex="1">
           <mxGeometry x="126.36" y="889.5" width="165.07" height="45" as="geometry" />
         </mxCell>
         <mxCell id="kCtCq2d6OYgkBiXgDesf-66" value="ME2-O2-20" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontColor=#000000;fontStyle=1;fontSize=20;labelBackgroundColor=none;" parent="1" vertex="1">
