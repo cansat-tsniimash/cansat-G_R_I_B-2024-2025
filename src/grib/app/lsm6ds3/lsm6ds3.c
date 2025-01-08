@@ -41,13 +41,17 @@ int32_t lsm_write(void* handle, uint8_t reg_addr, const uint8_t *data_ptr, uint1
     return 0;
 }
 
-void lsm_init(stmdev_ctx_t* lsm_dev, I2C_HandleTypeDef* i2c_handle){
+uint8_t lsm_init(stmdev_ctx_t* lsm_dev, I2C_HandleTypeDef* i2c_handle){
+	uint8_t ret = 0;
+	dwt_delay_init();
 	lsm_dev->read_reg = lsm_read;
 	lsm_dev->write_reg = lsm_write;
 	lsm_dev->handle = i2c_handle;
-	lsm6ds3_reset_set(lsm_dev, 1);
-	lsm6ds3_xl_full_scale_set(lsm_dev, LSM6DS3_16g);
-	lsm6ds3_xl_data_rate_set(lsm_dev, LSM6DS3_XL_ODR_52Hz);
-	lsm6ds3_gy_full_scale_set(lsm_dev, LSM6DS3_2000dps);
-	lsm6ds3_gy_data_rate_set(lsm_dev, LSM6DS3_GY_ODR_1k66Hz);
+	if (lsm6ds3_reset_set(lsm_dev, 1) != 0) ret = 1;
+	HAL_Delay(100);
+	if(lsm6ds3_xl_full_scale_set(lsm_dev, LSM6DS3_16g) != 0) ret = 1;
+	if(lsm6ds3_xl_data_rate_set(lsm_dev, LSM6DS3_XL_ODR_52Hz) != 0) ret = 1;
+	if(lsm6ds3_gy_full_scale_set(lsm_dev, LSM6DS3_2000dps) != 0) ret = 1;
+	if(lsm6ds3_gy_data_rate_set(lsm_dev, LSM6DS3_GY_ODR_1k66Hz) != 0) ret = 1;
+	return ret;
 }

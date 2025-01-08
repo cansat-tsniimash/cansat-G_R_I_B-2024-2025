@@ -43,6 +43,7 @@ void bmp_delay(uint32_t period, void *intf_ptr){
 }
 
 void bmp_init(bme280_dev_t* bmp_ptr, I2C_HandleTypeDef* i2c_ptr){
+	dwt_delay_init();
 	bmp_ptr->read = bmp_read;
 	bmp_ptr->write = bmp_write;
 	bmp_ptr->intf_ptr = i2c_ptr;
