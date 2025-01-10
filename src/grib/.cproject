@@ -73,9 +73,9 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
+						<entry excluding="t" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="app"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
-						<entry excluding="t" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="app"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -147,9 +147,9 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
+						<entry excluding="t" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="app"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
-						<entry excluding="t" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="app"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

@@ -18,8 +18,13 @@
 
 #include "lis3mdl\lis3mdl.h" // датчик lis3mdl
 
+#include "ds18b20\onewire.h"
+
+#include "resistor\resistor.h"
+
 #include <stm32f1xx.h>
 
+extern ADC_HandleTypeDef hadc1;
 extern I2C_HandleTypeDef hi2c1;
 
 typedef struct{
@@ -63,10 +68,21 @@ void appmain(){
 	my_data.lis_err = lis_init(&lis, &hi2c1);
 	int16_t temp_magn[3];
 
+	// DS18B20
+	one_wire_bus_t bus;
+	one_wire_init(bus);
+	ds18b20_write_config(bus, DS18B20_RES_750MS);
+	one_wire_start_convertion(bus);
+	uint32_t get_time = HAL_GetTick();
+
+	// resistor
+
+	float result;
+
 	while(1){
 		// BMP280
 		bme280_get_sensor_data(BME280_ALL, &data, &bmp); // вывод давления и температуры
-		//LSM6DS3
+		// LSM6DS3
 		my_data.pressure = data.pressure;
 		my_data.temp = data.temperature;
 		//printf("temp = %f\n bmp = %f", data.temperature, data.pressure);
@@ -83,6 +99,15 @@ void appmain(){
 		for (int i = 0; i < 3; i++) {
 		    my_data.magn[i] = lis3mdl_from_fs16_to_gauss(temp_magn[i]);
 		}
+		//DS18B20
+		if(get_time + 750 < HAL_GetTick()){
+			get_time = HAL_GetTick();
+			volatile uint16_t temp = ds18b20_read_temp(bus);
+			one_wire_start_convertion(bus);
+		}
+		// resistor
+		megalux(&hadc1, &result);
+
 	}
 }
 
