@@ -22,6 +22,8 @@
 
 #include "resistor\resistor.h"
 
+#include "CD4051\cd4051.h"
+
 #include <stm32f1xx.h>
 
 extern ADC_HandleTypeDef hadc1;
@@ -77,6 +79,9 @@ void appmain(){
 
 	// resistor
 
+	// мультплексер CD4051
+
+
 	float result;
 
 	while(1){
@@ -106,8 +111,8 @@ void appmain(){
 			one_wire_start_convertion(bus);
 		}
 		// resistor
+		cd4051_change_ch(0);
 		megalux(&hadc1, &result);
-
 	}
 }
 
