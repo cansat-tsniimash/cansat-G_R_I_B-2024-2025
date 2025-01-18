@@ -24,6 +24,10 @@
 
 #include "CD4051\cd4051.h"
 
+#include "fatfs_sd\fatfs_sd.h" // micro sd
+
+#include "..\Middlewares\Third_Party\FatFs\src\ff.h" // micro sd
+
 #include <stm32f1xx.h>
 
 extern ADC_HandleTypeDef hadc1;
@@ -81,7 +85,25 @@ void appmain(){
 
 	// мультплексер CD4051
 
+	// sd
 
+	FATFS fileSystem; // переменная типа FATFS
+	FIL testFile; // хендлер файла
+    char testBuffer[16] = "TestTestTestTest";  // Данные для записи
+    UINT testBytes;  // Количество записанных байт
+    uint8_t path[] = "testfile.txt\0";  // Путь к файлу
+
+    FRESULT mount_res;
+    FRESULT res;
+    int mount_attemps;
+    for(mount_attemps = 0; mount_attemps < 5; mount_attemps++)
+    {
+    	mount_res = f_mount(&fileSystem, "", 1);
+        if (mount_res == FR_OK) {
+        	res = f_open(&testFile, (char*)path, FA_WRITE | FA_CREATE_ALWAYS);
+        	break;
+        }
+    }
 	float result;
 
 	while(1){
@@ -113,6 +135,28 @@ void appmain(){
 		// resistor
 		cd4051_change_ch(0);
 		megalux(&hadc1, &result);
+
+		//sd
+
+		if (mount_res == FR_OK)
+		{
+			res = f_write(&testFile, (uint8_t*) testBuffer, sizeof(testBuffer), &testBytes);
+
+			if(res != FR_OK){
+				f_close(&testFile);
+				f_mount(NULL, "", 0);
+				mount_res = f_mount(&fileSystem, "", 1);
+				if(res == FR_OK){
+					res = f_open(&testFile, (char*)path, FA_WRITE | FA_CREATE_ALWAYS);
+				}
+			}
+		}
+		else
+		{
+			f_mount(NULL, "", 0);
+			mount_res = f_mount(&fileSystem, "", 1);
+		}
+
 	}
 }
 
