@@ -90,9 +90,9 @@ int one_wire_read_bit(one_wire_bus_t bus){
 	one_wire_force_down(bus);
 	dwt_delay_us(2);
 	one_wire_release(bus);
-	dwt_delay_us(20);
+	dwt_delay_us(10);
 	int res = HAL_GPIO_ReadPin(bus.port, bus.pinchik) == GPIO_PIN_SET;
-	dwt_delay_us(30);
+	dwt_delay_us(40);
 	return res;
 }
 

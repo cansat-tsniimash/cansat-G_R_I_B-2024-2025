@@ -76,6 +76,8 @@ void appmain(){
 
 	// DS18B20
 	one_wire_bus_t bus;
+	bus.port = GPIOA;
+	bus.pinchik = GPIO_PIN_15;
 	one_wire_init(bus);
 	ds18b20_write_config(bus, DS18B20_RES_750MS);
 	one_wire_start_convertion(bus);
@@ -98,7 +100,7 @@ void appmain(){
     int mount_attemps;
     for(mount_attemps = 0; mount_attemps < 5; mount_attemps++)
     {
-    	mount_res = f_mount(&fileSystem, "", 1);
+    	mount_res = f_mount(&fileSystem, "", 0);
         if (mount_res == FR_OK) {
         	res = f_open(&testFile, (char*)path, FA_WRITE | FA_CREATE_ALWAYS);
         	break;
@@ -130,6 +132,7 @@ void appmain(){
 		if(get_time + 750 < HAL_GetTick()){
 			get_time = HAL_GetTick();
 			volatile uint16_t temp = ds18b20_read_temp(bus);
+			volatile float tempf = temp / 16.0;
 			one_wire_start_convertion(bus);
 		}
 		// resistor

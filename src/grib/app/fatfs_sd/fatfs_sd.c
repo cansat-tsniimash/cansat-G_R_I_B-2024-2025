@@ -1,5 +1,5 @@
 #include "stm32f1xx_hal.h"
-#ifdef HAL_FATFS_ENABLED
+//#ifdef HAL_FATFS_ENABLED
 
 
 #define TRUE  1
@@ -7,15 +7,16 @@
 #define bool BYTE
 
 
+#include "diskio.h"
 #include "fatfs_sd.h"
 
 
 extern SPI_HandleTypeDef 	hspi1;
 #define HSPI_SDCARD		 	&hspi1
 #define	SD_CS_PORT			GPIOB
-#define SD_CS_PIN			GPIO_PIN_0
+#define SD_CS_PIN			GPIO_PIN_12
 
-extern volatile uint16_t Timer1, Timer2;					/* 1ms Timer Counter */
+volatile uint16_t Timer1, Timer2;					/* 1ms Timer Counter */
 
 static volatile DSTATUS Stat = STA_NOINIT;	/* Disk Status */
 static uint8_t CardType;                    /* Type 0:MMC, 1:SDC, 2:Block addressing */
@@ -66,7 +67,7 @@ static uint8_t SPI_RxByte(void)
 }
 
 /* SPI receive a byte via pointer */
-static void SPI_RxBytePtr(uint8_t *buff) 
+static void SPI_RxBytePtr(uint8_t *buff)
 {
 	*buff = SPI_RxByte();
 }
@@ -92,7 +93,7 @@ static uint8_t SD_ReadyWait(void)
 }
 
 /* power on */
-static void SD_PowerOn(void) 
+static void SD_PowerOn(void)
 {
 	uint8_t args[6];
 	uint32_t cnt = 0x1FFF;
@@ -130,13 +131,13 @@ static void SD_PowerOn(void)
 }
 
 /* power off */
-static void SD_PowerOff(void) 
+static void SD_PowerOff(void)
 {
 	PowerFlag = 0;
 }
 
 /* check power flag */
-static uint8_t SD_CheckPower(void) 
+static uint8_t SD_CheckPower(void)
 {
 	return PowerFlag;
 }
@@ -160,7 +161,7 @@ static bool SD_RxDataBlock(BYTE *buff, UINT len)
 	/* receive data */
 	do {
 		SPI_RxBytePtr(buff++);
-	} while(len--);
+	} while(--len);
 
 	/* discard CRC */
 	SPI_RxByte();
@@ -252,7 +253,7 @@ static BYTE SD_SendCmd(BYTE cmd, uint32_t arg)
  **************************************/
 
 /* initialize SD */
-DSTATUS SD_disk_initialize(BYTE drv) 
+DSTATUS SD_disk_initialize(BYTE drv)
 {
 	uint8_t n, type, ocr[4];
 
@@ -352,14 +353,14 @@ DSTATUS SD_disk_initialize(BYTE drv)
 }
 
 /* return disk status */
-DSTATUS SD_disk_status(BYTE drv) 
+DSTATUS SD_disk_status(BYTE drv)
 {
 	if (drv) return STA_NOINIT;
 	return Stat;
 }
 
 /* read sector */
-DRESULT SD_disk_read(BYTE pdrv, BYTE* buff, DWORD sector, UINT count) 
+DRESULT SD_disk_read(BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
 {
 	/* pdrv should be 0 */
 	if (pdrv || !count) return RES_PARERR;
@@ -401,7 +402,7 @@ DRESULT SD_disk_read(BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
 
 /* write sector */
 #if _USE_WRITE == 1
-DRESULT SD_disk_write(BYTE pdrv, const BYTE* buff, DWORD sector, UINT count) 
+DRESULT SD_disk_write(BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
 {
 	/* pdrv should be 0 */
 	if (pdrv || !count) return RES_PARERR;
@@ -456,7 +457,7 @@ DRESULT SD_disk_write(BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
 #endif /* _USE_WRITE */
 
 /* ioctl */
-DRESULT SD_disk_ioctl(BYTE drv, BYTE ctrl, void *buff) 
+DRESULT SD_disk_ioctl(BYTE drv, BYTE ctrl, void *buff)
 {
 	DRESULT res;
 	uint8_t n, csd[16], *ptr = buff;
@@ -550,4 +551,4 @@ DRESULT SD_disk_ioctl(BYTE drv, BYTE ctrl, void *buff)
 
 	return res;
 }
-#endif
+//#endif
