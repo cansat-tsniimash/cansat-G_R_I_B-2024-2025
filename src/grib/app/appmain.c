@@ -26,12 +26,15 @@
 
 #include "fatfs_sd\fatfs_sd.h" // micro sd
 
+#include "E220400T22S/e220_400t22s.h"
+
 #include "..\Middlewares\Third_Party\FatFs\src\ff.h" // micro sd
 
 #include <stm32f1xx.h>
 
 extern ADC_HandleTypeDef hadc1;
 extern I2C_HandleTypeDef hi2c1;
+extern UART_HandleTypeDef huart2;
 
 typedef struct{
 	float temp;
@@ -89,7 +92,7 @@ void appmain(){
 
 	// sd
 
-	FATFS fileSystem; // переменная типа FATFS
+	/*FATFS fileSystem; // переменная типа FATFS
 	FIL testFile; // хендлер файла
     char testBuffer[16] = "TestTestTestTest";  // Данные для записи
     UINT testBytes;  // Количество записанных байт
@@ -105,10 +108,29 @@ void appmain(){
         	res = f_open(&testFile, (char*)path, FA_WRITE | FA_CREATE_ALWAYS);
         	break;
         }
-    }
+    }*/
 	float result;
 
 	while(1){
+		uint8_t reg_addr = 7;
+		uint8_t reg_data = 0x88;
+
+		e220_pins_t e220_bus;
+		e220_bus.m0_pinchik = GPIO_PIN_1;
+		e220_bus.m1_pinchik = GPIO_PIN_0;
+		e220_bus.m0_port = GPIOB;
+	    e220_bus.m1_port = GPIOB;
+	    e220_bus.uart = &huart2;
+		e220_write_reg(e220_bus, &reg_data, reg_addr);
+
+
+
+
+
+
+
+
+
 		// BMP280
 		bme280_get_sensor_data(BME280_ALL, &data, &bmp); // вывод давления и температуры
 		// LSM6DS3
@@ -141,7 +163,7 @@ void appmain(){
 
 		//sd
 
-		if (mount_res == FR_OK)
+		/*if (mount_res == FR_OK)
 		{
 			res = f_write(&testFile, (uint8_t*) testBuffer, sizeof(testBuffer), &testBytes);
 
@@ -158,7 +180,7 @@ void appmain(){
 		{
 			f_mount(NULL, "", 0);
 			mount_res = f_mount(&fileSystem, "", 1);
-		}
+		}*/
 
 	}
 }
