@@ -49,7 +49,41 @@ typedef struct{
 	uint8_t lsm_err;
 } data_t;
 
+typedef struct{
+	uint16_t start;
+	uint16_t team_id;
+	uint32_t time;
+	uint16_t temp_bmp280;
+	uint32_t pressure_bmp280;
+	uint16_t acceleration_x;
+	uint16_t acceleration_y;
+
+	uint16_t acceleration_z;
+	uint16_t angular_x;
+	uint16_t angular_y;
+	uint16_t angular_z;
+	uint8_t cheksum_org;
+	uint16_t number_packet;
+	uint8_t state;
+	uint16_t photoresistor;
+	uint16_t lis3mdl_x;
+	uint16_t lis3mdl_y;
+	uint16_t lis3mdl_z;
+	uint16_t ds18b20;
+	float ne06mv2_height;
+	float ne06mv2_longitude;
+	float ne06mv2_latitude;
+	uint8_t neo6mv2_fix;
+	uint16_t scd41;
+	uint16_t mq_4;
+	uint16_t me2o2;
+	uint8_t checksum_grib;
+} packet_t;
+
+
 void appmain(){
+	packet_t packet;
+	packet.start = 0xAAAA;
 	volatile data_t my_data;
 	int16_t temp_gyro[3]; // temp = ВРЕМЕННО!
 	int16_t temp_accel[3];
@@ -109,19 +143,30 @@ void appmain(){
         	break;
         }
     }*/
+
+	//e220-400t22s
+
+
+
+	//
+	e220_pins_t e220_bus;
+	e220_bus.m0_pinchik = GPIO_PIN_1;
+	e220_bus.m1_pinchik = GPIO_PIN_0;
+	e220_bus.m0_port = GPIOB;
+    e220_bus.m1_port = GPIOB;
+    e220_bus.aux_pin = GPIO_PIN_3;
+	e220_bus.aux_port = GPIOB;
+    e220_bus.uart = &huart2;
+    //e220_set_mode(e220_bus, E220_MODE_DSM);
+    char helloworld[200] = "Privet GRIBI moyi";
 	float result;
 
 	while(1){
 		uint8_t reg_addr = 7;
 		uint8_t reg_data = 0x88;
 
-		e220_pins_t e220_bus;
-		e220_bus.m0_pinchik = GPIO_PIN_1;
-		e220_bus.m1_pinchik = GPIO_PIN_0;
-		e220_bus.m0_port = GPIOB;
-	    e220_bus.m1_port = GPIOB;
-	    e220_bus.uart = &huart2;
-		e220_write_reg(e220_bus, &reg_data, reg_addr);
+	    e220_send_packet(e220_bus, 0xFFFF, (uint8_t *)helloworld, 200, 23);
+
 
 
 
@@ -133,33 +178,55 @@ void appmain(){
 
 		// BMP280
 		bme280_get_sensor_data(BME280_ALL, &data, &bmp); // вывод давления и температуры
+		packet.pressure_bmp280 = data.pressure;
+		packet.temp_bmp280 = data.temperature;
 		// LSM6DS3
-		my_data.pressure = data.pressure;
-		my_data.temp = data.temperature;
 		//printf("temp = %f\n bmp = %f", data.temperature, data.pressure);
 		my_data.gyro_error = lsm6ds3_angular_rate_raw_get(&lsm, temp_gyro);
-		for(int i = 0; i < 3 ; i++){
+		packet.angular_x = temp_gyro[0];
+		packet.angular_y = temp_gyro[1];
+		packet.angular_z = temp_gyro[2];
+
+		my_data.accel_error = lsm6ds3_acceleration_raw_get(&lsm, temp_accel);
+		packet.acceleration_x = temp_accel[0];
+		packet.acceleration_y = temp_accel[1];
+		packet.acceleration_z = temp_accel[2];
+		// LIS3MDL
+		my_data.magn_error = lis3mdl_magnetic_raw_get(&lis, temp_magn);
+		packet.lis3mdl_x = temp_magn[0];
+		packet.lis3mdl_y = temp_magn[1];
+		packet.lis3mdl_z = temp_magn[2];
+
+		/*for(int i = 0; i < 3 ; i++){
 			my_data.gyro[i] = lsm6ds3_from_fs2000dps_to_mdps(temp_gyro[i]);
 		}
 		my_data.accel_error = lsm6ds3_acceleration_raw_get(&lsm, temp_accel);
 		for(int i = 0; i < 3 ; i++){
 			my_data.accel[i] = lsm6ds3_from_fs16g_to_mg(temp_accel[i]);
 		}
-		// LIS3MDL
+
 		my_data.magn_error = lis3mdl_magnetic_raw_get(&lis, temp_magn);
 		for (int i = 0; i < 3; i++) {
 		    my_data.magn[i] = lis3mdl_from_fs16_to_gauss(temp_magn[i]);
-		}
+		}*/
+
 		//DS18B20
 		if(get_time + 750 < HAL_GetTick()){
 			get_time = HAL_GetTick();
-			volatile uint16_t temp = ds18b20_read_temp(bus);
-			volatile float tempf = temp / 16.0;
+			packet.ds18b20 = ds18b20_read_temp(bus);
 			one_wire_start_convertion(bus);
 		}
 		// resistor
 		cd4051_change_ch(0);
 		megalux(&hadc1, &result);
+		packet.photoresistor = result;
+		//e220_set_mode(e220_bus, E220_MODE_DSM);
+		//uint8_t bufer_uart_read[9] = {0};
+		//uint8_t bufer_uart[5] = {0xC1, 0, 0x07, 0x88, 0x88};
+		//HAL_UART_Transmit(&huart2, bufer_uart, 3, 1000);
+		//HAL_UART_Receive(&huart2, bufer_uart_read, 9, 1000);
+
+		//e220_set_addr(e220_bus, 0x8888);
 
 		//sd
 
