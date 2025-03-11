@@ -15,6 +15,7 @@
   *
   ******************************************************************************
   */
+#if 0
 /* USER CODE END Header */
 #include "fatfs.h"
 
@@ -33,21 +34,9 @@ void MX_FATFS_Init(void)
   retUSER = FATFS_LinkDriver(&USER_Driver, USERPath);
 
   /* USER CODE BEGIN Init */
-  /* additional user code for init */
   /* USER CODE END Init */
 }
-
-/**
-  * @brief  Gets Time from RTC
-  * @param  None
-  * @retval Time in DWORD
-  */
-DWORD get_fattime(void)
-{
-  /* USER CODE BEGIN get_fattime */
-  return 0;
-  /* USER CODE END get_fattime */
-}
+#endif
 
 /* USER CODE BEGIN Application */
 

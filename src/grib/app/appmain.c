@@ -30,11 +30,29 @@
 
 #include "..\Middlewares\Third_Party\FatFs\src\ff.h" // micro sd
 
+#include "mq-4\mq4.h" // mq-4
+
+#include "me2-o2-f20\me2o2f20.h" // ME2-O2-Ф20
+
 #include <stm32f1xx.h>
+
+#include "scd41\scd41.h"
+
+#include "neo6mv2\neo6mv2.h"
 
 extern ADC_HandleTypeDef hadc1;
 extern I2C_HandleTypeDef hi2c1;
 extern UART_HandleTypeDef huart2;
+
+uint8_t xorBlock(const uint8_t *data, size_t size) {
+    uint8_t result = 0x00;
+
+    for (size_t i = 0; i < size; i++) {
+        result ^= data[i];
+    }
+
+    return result;
+}
 
 typedef struct{
 	float temp;
@@ -49,27 +67,27 @@ typedef struct{
 	uint8_t lsm_err;
 } data_t;
 
+#pragma pack(push, 1)
 typedef struct{
 	uint16_t start;
 	uint16_t team_id;
 	uint32_t time;
-	uint16_t temp_bmp280;
+	int16_t temp_bmp280;
 	uint32_t pressure_bmp280;
-	uint16_t acceleration_x;
-	uint16_t acceleration_y;
-
-	uint16_t acceleration_z;
-	uint16_t angular_x;
-	uint16_t angular_y;
-	uint16_t angular_z;
+	int16_t acceleration_x;
+	int16_t acceleration_y;
+	int16_t acceleration_z;
+	int16_t angular_x;
+	int16_t angular_y;
+	int16_t angular_z;
 	uint8_t cheksum_org;
 	uint16_t number_packet;
 	uint8_t state;
 	uint16_t photoresistor;
-	uint16_t lis3mdl_x;
-	uint16_t lis3mdl_y;
-	uint16_t lis3mdl_z;
-	uint16_t ds18b20;
+	int16_t lis3mdl_x;
+	int16_t lis3mdl_y;
+	int16_t lis3mdl_z;
+	int16_t ds18b20;
 	float ne06mv2_height;
 	float ne06mv2_longitude;
 	float ne06mv2_latitude;
@@ -79,11 +97,12 @@ typedef struct{
 	uint16_t me2o2;
 	uint8_t checksum_grib;
 } packet_t;
-
+#pragma pack(pop)
 
 void appmain(){
-	packet_t packet;
+	packet_t packet = {0};
 	packet.start = 0xAAAA;
+	packet.number_packet = 0;
 	volatile data_t my_data;
 	int16_t temp_gyro[3]; // temp = ВРЕМЕННО!
 	int16_t temp_accel[3];
@@ -126,26 +145,37 @@ void appmain(){
 
 	// sd
 
-	/*FATFS fileSystem; // переменная типа FATFS
-	FIL testFile; // хендлер файла
-    char testBuffer[16] = "TestTestTestTest";  // Данные для записи
+	FATFS fileSystem; // переменная типа FATFS
+	FIL binFile, csvFile; // хендлер файла
     UINT testBytes;  // Количество записанных байт
-    uint8_t path[] = "testfile.txt\0";  // Путь к файлу
 
-    FRESULT mount_res;
-    FRESULT res;
-    int mount_attemps;
+    FRESULT mount_res = 255;
+    FRESULT bin_res = 255;
+    FRESULT csv_res = 255;
+    uint8_t bin_path[] = "grib.bin\0";
+    uint8_t csv_path[] = "grib.csv\0";
+    char str_buffer[300] = {0};
+    char str_header[300] = "number_packet; time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_longitude; ne06mv2_latitude; neo6mv2_fix; scd41; mq_4; me2o2;\n";
+    /*int mount_attemps;
     for(mount_attemps = 0; mount_attemps < 5; mount_attemps++)
     {
-    	mount_res = f_mount(&fileSystem, "", 0);
+    	mount_res = f_mount(&fileSystem, "0:", 0);
         if (mount_res == FR_OK) {
-        	res = f_open(&testFile, (char*)path, FA_WRITE | FA_CREATE_ALWAYS);
+        	res = f_open(&binFile, "gribochek_raw.bin\0", FA_WRITE | FA_CREATE_ALWAYS);
         	break;
         }
     }*/
 
 	//e220-400t22s
 
+    // scd41
+
+
+    scd41_start_measurement(&hi2c1);
+    uint16_t co2 = 0;
+	float temp = 0;
+	float pressure = 0;
+    scd41_read_measurement(&co2, &temp, &pressure, &hi2c1);
 
 
 	//
@@ -157,31 +187,30 @@ void appmain(){
     e220_bus.aux_pin = GPIO_PIN_3;
 	e220_bus.aux_port = GPIOB;
     e220_bus.uart = &huart2;
-    //e220_set_mode(e220_bus, E220_MODE_DSM);
-    char helloworld[200] = "Privet GRIBI moyi";
-	float result;
+    e220_set_mode(e220_bus, E220_MODE_DSM);
+
+    e220_set_addr(e220_bus, 0xFFFF);
+    HAL_Delay(100);
+    e220_set_reg0(e220_bus, E220_REG0_AIR_RATE_2400, E220_REG0_PARITY_8N1_DEF, E220_REG0_PORT_RATE_9600);
+    HAL_Delay(100);
+    e220_set_reg1(e220_bus, E220_REG1_PACKET_LEN_200B, E220_REG1_RSSI_OFF, E220_REG1_TPOWER_22);
+    HAL_Delay(100);
+    e220_set_channel(e220_bus, 1);
+    HAL_Delay(100);
+    e220_set_reg3(e220_bus, E220_REG3_RSSI_BYTE_OFF, E220_REG3_TRANS_M_TRANSPARENT, E220_REG3_LBT_EN_OFF, E220_REG3_WOR_CYCLE_500);
+    e220_set_mode(e220_bus, E220_MODE_TM);
+
+    //char helloworld3[25] = "Bye, Anton! [FIX]";
+    float result;
+	float mq_result;
+	float me2o2_result;
 
 	while(1){
-		uint8_t reg_addr = 7;
-		uint8_t reg_data = 0x88;
-
-	    e220_send_packet(e220_bus, 0xFFFF, (uint8_t *)helloworld, 200, 23);
-
-
-
-
-
-
-
-
-
-
 		// BMP280
 		bme280_get_sensor_data(BME280_ALL, &data, &bmp); // вывод давления и температуры
 		packet.pressure_bmp280 = data.pressure;
-		packet.temp_bmp280 = data.temperature;
+		packet.temp_bmp280 = data.temperature * 100;
 		// LSM6DS3
-		//printf("temp = %f\n bmp = %f", data.temperature, data.pressure);
 		my_data.gyro_error = lsm6ds3_angular_rate_raw_get(&lsm, temp_gyro);
 		packet.angular_x = temp_gyro[0];
 		packet.angular_y = temp_gyro[1];
@@ -197,19 +226,6 @@ void appmain(){
 		packet.lis3mdl_y = temp_magn[1];
 		packet.lis3mdl_z = temp_magn[2];
 
-		/*for(int i = 0; i < 3 ; i++){
-			my_data.gyro[i] = lsm6ds3_from_fs2000dps_to_mdps(temp_gyro[i]);
-		}
-		my_data.accel_error = lsm6ds3_acceleration_raw_get(&lsm, temp_accel);
-		for(int i = 0; i < 3 ; i++){
-			my_data.accel[i] = lsm6ds3_from_fs16g_to_mg(temp_accel[i]);
-		}
-
-		my_data.magn_error = lis3mdl_magnetic_raw_get(&lis, temp_magn);
-		for (int i = 0; i < 3; i++) {
-		    my_data.magn[i] = lis3mdl_from_fs16_to_gauss(temp_magn[i]);
-		}*/
-
 		//DS18B20
 		if(get_time + 750 < HAL_GetTick()){
 			get_time = HAL_GetTick();
@@ -220,35 +236,56 @@ void appmain(){
 		cd4051_change_ch(0);
 		megalux(&hadc1, &result);
 		packet.photoresistor = result;
-		//e220_set_mode(e220_bus, E220_MODE_DSM);
-		//uint8_t bufer_uart_read[9] = {0};
-		//uint8_t bufer_uart[5] = {0xC1, 0, 0x07, 0x88, 0x88};
-		//HAL_UART_Transmit(&huart2, bufer_uart, 3, 1000);
-		//HAL_UART_Receive(&huart2, bufer_uart_read, 9, 1000);
 
-		//e220_set_addr(e220_bus, 0x8888);
+		cd4051_change_ch(1);
+		mq4_ppm(&hadc1, &mq_result);
+		packet.mq_4 = mq_result;
+
+		cd4051_change_ch(2);
+		me2o2f20_read(&hadc1, &me2o2_result);
+		packet.me2o2 = me2o2_result;
+
+
+		packet.time = HAL_GetTick();
+		packet.number_packet++;
+		packet.cheksum_org = xorBlock((uint8_t *)&packet, 26);
+		packet.checksum_grib = xorBlock((uint8_t *)&packet, sizeof(packet_t) - 1);
+
+	    e220_send_packet(e220_bus, 0xFFFF, (uint8_t *)&packet, sizeof(packet_t), 23);
 
 		//sd
 
-		/*if (mount_res == FR_OK)
-		{
-			res = f_write(&testFile, (uint8_t*) testBuffer, sizeof(testBuffer), &testBytes);
-
-			if(res != FR_OK){
-				f_close(&testFile);
-				f_mount(NULL, "", 0);
-				mount_res = f_mount(&fileSystem, "", 1);
-				if(res == FR_OK){
-					res = f_open(&testFile, (char*)path, FA_WRITE | FA_CREATE_ALWAYS);
-				}
-			}
-		}
-		else
-		{
+		if (mount_res != FR_OK){
 			f_mount(NULL, "", 0);
 			mount_res = f_mount(&fileSystem, "", 1);
-		}*/
+			bin_res = f_open(&binFile, (char*)bin_path, FA_WRITE | 0x30);
+			csv_res = f_open(&csvFile, (char*)csv_path, FA_WRITE | 0x30);
+			csv_res = f_write(&csvFile, str_header, 300, &testBytes);
+		}
 
+		if  (mount_res == FR_OK && bin_res != FR_OK){
+			f_close(&binFile);
+			bin_res = f_open(&binFile, (char*)bin_path, FA_WRITE | 0x30);
+		}
+
+		if (mount_res == FR_OK && bin_res == FR_OK)
+		{
+			bin_res = f_write(&binFile, (uint8_t*)&packet, sizeof(packet_t), &testBytes);
+			f_sync(&binFile);
+		}
+
+		if  (mount_res == FR_OK && csv_res != FR_OK){
+			f_close(&csvFile);
+			csv_res = f_open(&csvFile, (char*)csv_path, FA_WRITE | 0x30);
+			csv_res = f_write(&csvFile, str_header, 300, &testBytes);
+			//f_puts("time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_longitude; ne06mv2_latitude; neo6mv2_fix; scd41; mq_4; me2o2;\n", &csvFile);
+		}
+		if (mount_res == FR_OK && csv_res == FR_OK)
+		{
+			uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;\n", packet.number_packet , packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.ne06mv2_height * 1000), (long int)(packet.ne06mv2_longitude * 1000), (long int)(packet.ne06mv2_latitude * 1000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2);
+			csv_res = f_write(&csvFile, str_buffer, csv_write, &testBytes);
+			f_sync(&csvFile);
+		}
 	}
 }
 
