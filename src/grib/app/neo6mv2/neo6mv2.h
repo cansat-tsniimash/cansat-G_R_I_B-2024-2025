@@ -30,13 +30,15 @@ typedef struct {
     char date[7];
 } GPS_Data;
 
-void neo6mv2_Init(UART_HandleTypeDef *huart);
+void neo6mv2_Init();
+
+void neo6mv2_pushbyte(uint8_t byte);
 
 uint8_t neo6mv2_ParseLine(char* line);
 
 GPS_Data neo6mv2_GetData(void);
 
-void neo6mv2_UART_RxCallback(void);
+void neo6mv2_work();
 
 uint8_t neo6mv2_ParseGPRMC(char* line);
 uint8_t neo6mv2_ParseGPGGA(char* line);

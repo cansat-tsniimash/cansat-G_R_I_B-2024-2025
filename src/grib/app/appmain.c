@@ -43,6 +43,7 @@
 extern ADC_HandleTypeDef hadc1;
 extern I2C_HandleTypeDef hi2c1;
 extern UART_HandleTypeDef huart2;
+extern UART_HandleTypeDef huart1;
 
 uint8_t xorBlock(const uint8_t *data, size_t size) {
     uint8_t result = 0x00;
@@ -88,9 +89,9 @@ typedef struct{
 	int16_t lis3mdl_y;
 	int16_t lis3mdl_z;
 	int16_t ds18b20;
-	float ne06mv2_height;
-	float ne06mv2_longitude;
-	float ne06mv2_latitude;
+	float neo6mv2_height;
+	float neo6mv2_longitude;
+	float neo6mv2_latitude;
 	uint8_t neo6mv2_fix;
 	uint16_t scd41;
 	uint16_t mq_4;
@@ -170,13 +171,18 @@ void appmain(){
 
     // scd41
 
-
     scd41_start_measurement(&hi2c1);
     uint16_t co2 = 0;
 	float temp = 0;
 	float pressure = 0;
     scd41_read_measurement(&co2, &temp, &pressure, &hi2c1);
 
+
+    //neo6mv2
+
+    neo6mv2_Init();
+    __HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE);
+    __HAL_UART_ENABLE_IT(&huart1, UART_IT_ERR);
 
 	//
 	e220_pins_t e220_bus;
@@ -246,6 +252,14 @@ void appmain(){
 		packet.me2o2 = me2o2_result;
 
 
+		//neo6mv2
+		neo6mv2_work();
+		GPS_Data gps_data = neo6mv2_GetData();
+		packet.neo6mv2_latitude = gps_data.latitude;
+		packet.neo6mv2_longitude = gps_data.longitude;
+		packet.neo6mv2_height = gps_data.altitude;
+		packet.neo6mv2_fix = gps_data.fixQuality;
+
 		packet.time = HAL_GetTick();
 		packet.number_packet++;
 		packet.cheksum_org = xorBlock((uint8_t *)&packet, 26);
@@ -282,7 +296,7 @@ void appmain(){
 		}
 		if (mount_res == FR_OK && csv_res == FR_OK)
 		{
-			uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;\n", packet.number_packet , packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.ne06mv2_height * 1000), (long int)(packet.ne06mv2_longitude * 1000), (long int)(packet.ne06mv2_latitude * 1000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2);
+			uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;\n", packet.number_packet , packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.neo6mv2_height * 1000), (long int)(packet.neo6mv2_longitude * 1000), (long int)(packet.neo6mv2_latitude * 1000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2);
 			csv_res = f_write(&csvFile, str_buffer, csv_write, &testBytes);
 			f_sync(&csvFile);
 		}

@@ -7,20 +7,23 @@
 
 #include "neo6mv2.h"
 
-static UART_HandleTypeDef* GPS_UART;
+#include "cyclebuffer.h"
+
+
+#define NEO6M2_RXBUFFER_SIZE 128
+
 static GPS_Data gpsData;
-static char rxBuffer[128];
+static char rxBuffer[NEO6M2_RXBUFFER_SIZE];
 static uint8_t rxIndex = 0;
 static uint8_t lineReady = 0;
 static char nmeaLine[128];
+static cbuffer_t gps_buffer;
 
 extern float ne06mv2_height;
 extern float ne06mv2_longitude;
 extern float ne06mv2_latitude;
 
-void neo6mv2_Init(UART_HandleTypeDef *huart){
-    GPS_UART = huart;
-
+void neo6mv2_Init(){
     gpsData.latitude = 0.0f;
     gpsData.longitude = 0.0f;
     gpsData.altitude = 0.0f;
@@ -30,38 +33,70 @@ void neo6mv2_Init(UART_HandleTypeDef *huart){
     strcpy(gpsData.time, "000000.00");
     strcpy(gpsData.date, "010100");
 
-    ne06mv2_height = 0.0f;
-    ne06mv2_longitude = 0.0f;
-    ne06mv2_latitude = 0.0f;
-
-    HAL_UART_Receive_IT(GPS_UART, (uint8_t*)&rxBuffer[rxIndex], 1);
+    sbuffer_init(&gps_buffer);
 }
 
-void neo6mv2_UART_RxCallback(void){
-    if (rxBuffer[rxIndex] == '\n'){
-        rxBuffer[rxIndex] = '\0';
+void neo6mv2_work()
+{
+	int i;
 
-        if (rxIndex > 5 && rxBuffer[0] == '$'){
-            strcpy(nmeaLine, rxBuffer);
-            lineReady = 1;
-        }
-        rxIndex = 0;
-    } else if (rxBuffer[rxIndex] == '\r'){
-    } else {
-        rxIndex++;
-        if (rxIndex >= sizeof(rxBuffer) - 1){
-            rxIndex = 0;
-        }
-    }
-    HAL_UART_Receive_IT(GPS_UART, (uint8_t*)&rxBuffer[rxIndex], 1);
+	while(1){
+		if (rxIndex >= NEO6M2_RXBUFFER_SIZE)
+			break;
+
+		int candidate = sbuffer_pop(&gps_buffer);
+		if (candidate < 0)
+			break;
+
+		rxBuffer[rxIndex] = candidate;
+		rxIndex++;
+	}
+
+	while(rxIndex > 5 && rxBuffer[0] != '$')
+	{
+		for (int i = 0; i < rxIndex - 1; i++)
+			rxBuffer[i] = rxBuffer[i+1];
+		rxIndex--;
+	}
+
+	uint8_t flag = 0;
+
+	for(i = 0; i < rxIndex; i++){
+		if(rxBuffer[i] == '\n'){
+			flag = 1;
+			rxBuffer[i] = '\0';
+			break;
+		}
+	}
+	if (!flag)
+		return;
+
+
+
+	neo6mv2_ParseLine(rxBuffer);
+
+	rxBuffer[0] = 0;
+
 }
+
+
+void neo6mv2_pushbyte(uint8_t byte){
+	sbuffer_push(&gps_buffer, byte);
+}
+
+//char TEST_BUFF[200] = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47";
 
 uint8_t neo6mv2_ParseLine(char* line){
-    if (strstr(line, "$GPRMC")) {
-        return neo6mv2_ParseGPRMC(line);
+	char buf[6] = "GPGGA";
+	for (int i = 0; i < 5; i++)
+		if (line[i + 1] != buf[i])
+			return 0;
+	return neo6mv2_ParseGPGGA(line);
+    /*if (strstr(line, "$GPRMC")) {
+        //return neo6mv2_ParseGPRMC(line);
     } else if (strstr(line, "$GPGGA")){
         return neo6mv2_ParseGPGGA(line);
-    }
+    }*/
     return 0;
 }
 
@@ -69,14 +104,35 @@ static float neo6mv2_nmeaindecimal(char* coordinate, char dir) {
     float result = 0.0f;
     int degrees = 0;
     float minutes = 0.0f;
+    int i = 0;
+    int decimal = 0;
+    float factor = 0.1f;
 
-    if (dir == 'N' || dir == 'S') {
-        degrees = (coordinate[0] - '0') * 10 + (coordinate[1] - '0');
-        minutes = atof(&coordinate[2]);
-    } else {
-        degrees = (coordinate[0] - '0') * 100 + (coordinate[1] - '0') * 10 + (coordinate[2] - '0');
-        minutes = atof(&coordinate[3]);
+    if(dir == 'N' || dir == 'S') {
+    	degrees = (coordinate[0] - '0') * 10 + (coordinate[1] - '0');
+    	i = 2;
     }
+    else
+    {
+        degrees = (coordinate[0] - '0') * 100 + (coordinate[1] - '0') * 10 + (coordinate[2] - '0');
+        i = 3;
+    }
+    for(; coordinate[i] != '\0'; i++){
+        if (coordinate[i] == '.'){
+            decimal = 1;
+        }
+        else if (coordinate[i] >= '0' && coordinate[i] <= '9'){
+            if (decimal){
+                minutes += (coordinate[i] - '0') * factor;
+                factor *= 0.1f;
+            }
+            else
+            {
+                minutes = minutes * 10 + (coordinate[i] - '0');
+            }
+        }
+    }
+
     result = degrees + minutes/60.0f;
     if (dir == 'S' || dir == 'W'){
         result = -result;
@@ -84,114 +140,87 @@ static float neo6mv2_nmeaindecimal(char* coordinate, char dir) {
     return result;
 }
 
-uint8_t neo6mv2_ParseGPRMC(char* line) {
-    char* token;
-    char* ptr = line;
-    int tokenIndex = 0;
-    char latStr[15];
-    char lonStr[15];
-    char latDir, lonDir;
+uint8_t neo6mv2_ParseGPGGA(char* line){
+    char latStr[15] = {0};
+    char lonStr[15] = {0};
+    char latDir = 0, lonDir = 0;
+    int i = 0, field = 0, pos = 0;
+    float alt = 0;
+    int decimal = 0;
+    float factor = 0.1f;
 
-    while ((token = strtok(ptr, ",")) != NULL){
-        ptr = NULL;
-        switch (tokenIndex){
+    latStr[0] = '\0';
+    lonStr[0] = '\0';
+
+    for(i = 0; line[i] != '\0'; i++) {
+        if(line[i] == ',') {
+            field++;
+            pos = 0;
+            continue;
+        }
+
+        switch(field) {
+            case 0:
+                break;
             case 1:
-                strncpy(gpsData.time, token, sizeof(gpsData.time)-1);
-                gpsData.time[sizeof(gpsData.time)-1] = '\0';
                 break;
             case 2:
-                if (token[0] != 'A'){
-                    return 0;
+                if(pos < 14) {
+                    latStr[pos] = line[i];
+                    latStr[pos + 1] = '\0';
                 }
                 break;
             case 3:
-                strcpy(latStr, token);
+                latDir = line[i];
                 break;
             case 4:
-                latDir = token[0];
+                if(pos < 14) {
+                    lonStr[pos] = line[i];
+                    lonStr[pos + 1] = '\0';
+                }
                 break;
             case 5:
-                strcpy(lonStr, token);
+                lonDir = line[i];
                 break;
             case 6:
-                lonDir = token[0];
+                if(pos == 0){
+                    gpsData.fixQuality = line[i] - '0';
+                }
                 break;
             case 7:
-                gpsData.speed = atof(token) * 1.852f;
+                break;
+            case 8:
                 break;
             case 9:
-                strncpy(gpsData.date, token, sizeof(gpsData.date)-1);
-                gpsData.date[sizeof(gpsData.date)-1] = '\0';
+                if(line[i] == '.') {
+                    decimal = 1;
+                } else if(line[i] >= '0' && line[i] <= '9'){
+                    if(decimal) {
+                        alt += (line[i] - '0') * factor;
+                        factor *= 0.1f;
+                    } else {
+                        alt = alt * 10 + (line[i] - '0');
+                    }
+                }
                 break;
         }
-        tokenIndex++;
+        pos++;
     }
-    if (tokenIndex > 9 && latStr[0] != '\0' && lonStr[0] != '\0'){
+
+    if(latStr[0] != '\0' && lonStr[0] != '\0' && latDir != 0 && lonDir != 0){
         gpsData.latitude = neo6mv2_nmeaindecimal(latStr, latDir);
         gpsData.longitude = neo6mv2_nmeaindecimal(lonStr, lonDir);
-
-        ne06mv2_latitude = gpsData.latitude;
-        ne06mv2_longitude = gpsData.longitude;
-
+        gpsData.altitude = alt;
         return 1;
     }
+
     return 0;
 }
 
-uint8_t neo6mv2_ParseGPGGA(char* line){
-    char* token;
-    char* ptr = line;
-    int tokenIndex = 0;
-    char latStr[15];
-    char lonStr[15];
-    char latDir, lonDir;
-
-    while ((token = strtok(ptr, ",")) != NULL){
-        ptr = NULL;
-
-        switch (tokenIndex) {
-            case 2:
-                strcpy(latStr, token);
-                break;
-            case 3:
-                latDir = token[0];
-                break;
-            case 4:
-                strcpy(lonStr, token);
-                break;
-            case 5:
-                lonDir = token[0];
-                break;
-            case 6:
-                gpsData.fixQuality = atoi(token);
-                break;
-            case 7:
-                gpsData.satellites = atoi(token);
-                break;
-            case 9:
-                gpsData.altitude = atof(token);
-                ne06mv2_height = gpsData.altitude;
-                break;
-        }
-
-        tokenIndex++;
-    }
-    if (tokenIndex > 9 && latStr[0] != '\0' && lonStr[0] != '\0'){
-        gpsData.latitude = neo6mv2_nmeaindecimal(latStr, latDir);
-        gpsData.longitude = neo6mv2_nmeaindecimal(lonStr, lonDir);
-        ne06mv2_latitude = gpsData.latitude;
-        ne06mv2_longitude = gpsData.longitude;
-        return 1;
-    }
-    return 0;
-}
 GPS_Data neo6mv2_GetData(void){
     if (lineReady) {
         neo6mv2_ParseLine(nmeaLine);
         lineReady = 0;
-        ne06mv2_height = gpsData.altitude;
-        ne06mv2_longitude = gpsData.longitude;
-        ne06mv2_latitude = gpsData.latitude;
     }
     return gpsData;
 }
