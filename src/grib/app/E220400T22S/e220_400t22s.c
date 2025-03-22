@@ -5,9 +5,10 @@
  *      Author: user
  */
 
+#include "e220_400t22s.h"
+
 #include <stdio.h>
 
-#include "e220_400t22s.h"
 
 void e220_set_mode(e220_pins_t pin, E220_MODE_t mode){
 	switch(mode){

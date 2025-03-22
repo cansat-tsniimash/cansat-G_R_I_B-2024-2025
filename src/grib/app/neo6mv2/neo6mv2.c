@@ -76,6 +76,7 @@ void neo6mv2_work()
 	neo6mv2_ParseLine(rxBuffer);
 
 	rxBuffer[0] = 0;
+	memset(rxBuffer, 0x00, i);
 
 }
 

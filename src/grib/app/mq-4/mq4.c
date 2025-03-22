@@ -5,36 +5,6 @@
  *      Author: user
  */
 
-/*#include "mq4.h"
-
-#define PL (20000.0f) // в даташите пункт load resistance 20 ТЫСЯЧ ОМЕГА
-#define R0 (4000.0f) // сопротивление датчика в воздухе в омах
-
-int mq4_ppm(ADC_HandleTypeDef* hadc, float *mq4_ppm){
-	HAL_StatusTypeDef rc;
-
-	rc = HAL_ADC_Start(hadc);
-	if(rc != HAL_OK) return rc;
-
-	rc = HAL_ADC_PollForConversion(hadc, 100);
-	if(rc != HAL_OK) return rc;
-	uint32_t aboba_mq4 = HAL_ADC_GetValue(hadc);
-	float abobatovoltage = aboba_mq4 / 4095.0f * 3.3f; // ADC to напряжение
-
-	float abobars = (3.3f - abobatovoltage) * PL / abobatovoltage; // считаем сопротивление
-	float abobaotnoshenie = abobars / R0;
-
-	float naklon = -0.374f;
-	float smeshenie = 1.101f;
-
-	float aboba_ppm = pow(10, (log10(abobaotnoshenie) - smeshenie) / naklon);
-	*mq4_ppm = aboba_ppm;
-
-	rc = HAL_ADC_Stop(hadc);
-
-	return rc;
-}*/
-
 #include "mq4.h"
 
 #define PL (20000.0f)

@@ -13,8 +13,8 @@
 #include <stdint.h>
 #include <stm32f1xx.h>
 
-#include "bme280.h"
 #include "../dwt_delay.h"
+#include "bme280.h"
 
 typedef struct bme280_dev bme280_dev_t;
 

@@ -32,7 +32,6 @@ typedef enum{
 }E220_MODE_t;
 
 //REG0
-
 typedef enum{
 	E220_REG0_PORT_RATE_1200 = 0,
 	E220_REG0_PORT_RATE_2400 = 1,
@@ -61,7 +60,6 @@ typedef enum{
 }e220_set_reg0_airrate;
 
 //REG1
-
 typedef enum{
 	E220_REG1_PACKET_LEN_200B = 0,
 	E220_REG1_PACKET_LEN_128B = 1,
@@ -85,7 +83,6 @@ typedef enum{
 }e220_set_reg1_rssi;
 
 //REG3
-
 typedef enum{
 	E220_REG3_RSSI_BYTE_OFF = 0,
 	E220_REG3_RSSI_BYTE_ON = 1

@@ -2,49 +2,79 @@
  * appmain.c
  *
  *  Created on: Jan 6, 2025
- *      Author: user
+ *      Author: norfa
  */
+
+/*
+ * (почти готово/готово)
+ * lsm6ds3 (проверить)
+ * lis3mdl (проверить)
+ * scd41 (допилить и проверить)
+ * фоторезистор (проверить)
+ * me2o2f20 (проверить)
+ * mq-4 (проверить)
+ * e220-400t22s (вроде допилить и проверить)
+ * neo6mv2 (дополить и проверить)
+ * ds18b20 (проверить)
+ * micro-sd (допилить и проверить)
+ * bmp280 (проверить)
+ * (сделать)
+ * пьезодинамик (пины поменять)
+ * пережигатель (пины поменять)
+ *
+ */
+
+#include <stm32f1xx.h>
 
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
 #include <stdbool.h>
 
-#include "dwt_delay.h"
+#include "lsm6ds3\lsm6ds3.h" // датчик lsm6ds3 (I2C)
+#include "lis3mdl\lis3mdl.h" // датчик lis3mdl (I2C)
+#include "scd41\scd41.h" // датчик co2 (I2C)
 
-#include "BMP280\bmp.h" // датчик BMP280
+#include "resistor\resistor.h" // фоторезистор (ADC)
+#include "me2-o2-f20\me2o2f20.h" // ME2-O2-Ф20 (ADC)
+#include "mq-4\mq4.h" // mq-4 (ADC)
 
-#include "lsm6ds3\lsm6ds3.h" // датчик lsm6ds3
+#include "neo6mv2\neo6mv2.h" // датчик gps (UART)
+#include "e220400t22s/e220_400t22s.h" // радио (UART)
 
-#include "lis3mdl\lis3mdl.h" // датчик lis3mdl
+#include "ds18b20\onewire.h" // датчик ds18b20 (1-WIRE)
 
-#include "ds18b20\onewire.h"
+#include "fatfs_sd\fatfs_sd.h" // micro sd (SPI)
+#include "..\Middlewares\Third_Party\FatFs\src\ff.h" // micro sd (SPI)
 
-#include "resistor\resistor.h"
+#include "bmp280/bmp.h" // датчик BMP280 (I2C)
+#include "cd4051/cd4051.h" // мультиплексор
+#include "dwt_delay.h" // тайминги
 
-#include "CD4051\cd4051.h"
+#define PIEZOSPEAKER_PIN GPIO_PIN_0
+#define PIEZOSPEAKER_PORT GPIOA
 
-#include "fatfs_sd\fatfs_sd.h" // micro sd
+#define BURNER_PIN GPIO_PIN_4
+#define BURNER_PORT GPIOB
 
-#include "E220400T22S/e220_400t22s.h"
-
-#include "..\Middlewares\Third_Party\FatFs\src\ff.h" // micro sd
-
-#include "mq-4\mq4.h" // mq-4
-
-#include "me2-o2-f20\me2o2f20.h" // ME2-O2-Ф20
-
-#include <stm32f1xx.h>
-
-#include "scd41\scd41.h"
-
-#include "neo6mv2\neo6mv2.h"
-
+// обработчики для ADC, I2C и UART1/UART2
 extern ADC_HandleTypeDef hadc1;
 extern I2C_HandleTypeDef hi2c1;
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart1;
 
+typedef enum{
+	MS_PREPARATION = 0, // подготовка
+	MS_BEFORE_LAYING = 1, // до укладки
+	MS_FLIGHT_IN_THE_ROCKET = 2, // в ракете
+	MS_DESCENT_A = 3, // Спуск A
+	MS_DESCENT_B = 4, // Спуск B
+	MS_DESCENT_C = 5, // Спуск C
+	MS_ROUT = 6 // разгром
+
+} mission_state_t;
+
+// Вычисление контрольной суммы массива байтов
 uint8_t xorBlock(const uint8_t *data, size_t size) {
     uint8_t result = 0x00;
 
@@ -55,6 +85,28 @@ uint8_t xorBlock(const uint8_t *data, size_t size) {
     return result;
 }
 
+// пьезодинамик
+
+void piezospeaker_status(uint8_t status){
+	if(status == 1){
+		HAL_GPIO_WritePin(PIEZOSPEAKER_PORT, PIEZOSPEAKER_PIN, GPIO_PIN_SET);
+	}
+	else{
+		HAL_GPIO_WritePin(PIEZOSPEAKER_PORT, PIEZOSPEAKER_PIN, GPIO_PIN_RESET);
+	}
+}
+// пережигатель
+
+void burner_status(uint8_t status){
+	if(status == 1){
+		HAL_GPIO_WritePin(BURNER_PORT, BURNER_PIN, GPIO_PIN_SET);
+	}
+	else{
+		HAL_GPIO_WritePin(BURNER_PORT, BURNER_PIN, GPIO_PIN_RESET);
+	}
+}
+
+// структура для хранения данных с датчиков
 typedef struct{
 	float temp;
 	float pressure;
@@ -68,7 +120,8 @@ typedef struct{
 	uint8_t lsm_err;
 } data_t;
 
-#pragma pack(push, 1)
+// структура для хранения и передачи телеметрии
+#pragma pack(push, 1) // Обращение к компилятору не выравнивать структуру и хранить её в памяти без пустых байтов
 typedef struct{
 	uint16_t start;
 	uint16_t team_id;
@@ -89,25 +142,25 @@ typedef struct{
 	int16_t lis3mdl_y;
 	int16_t lis3mdl_z;
 	int16_t ds18b20;
-	float neo6mv2_height;
-	float neo6mv2_longitude;
 	float neo6mv2_latitude;
+	float neo6mv2_longitude;
+	float neo6mv2_height;
 	uint8_t neo6mv2_fix;
 	uint16_t scd41;
 	uint16_t mq_4;
 	uint16_t me2o2;
 	uint8_t checksum_grib;
 } packet_t;
-#pragma pack(pop)
+#pragma pack(pop) // Компилятор может добавлять выравнивающие байты для оптимизации работы процессора
 
 void appmain(){
+	piezospeaker_status(0);
 	packet_t packet = {0};
 	packet.start = 0xAAAA;
 	packet.number_packet = 0;
 	volatile data_t my_data;
 	int16_t temp_gyro[3]; // temp = ВРЕМЕННО!
 	int16_t temp_accel[3];
-
 
 	// BMP280
 	bme280_dev_t bmp;
@@ -120,11 +173,12 @@ void appmain(){
 	struct bme280_data data;
 	bmp_init(&bmp, &hi2c1);
 
+	bme280_get_sensor_data(BME280_ALL, &data, &bmp); // вывод давления и температуры
+	float pressure_zero  = data.pressure;
+
 	// LSM6DS3
 	stmdev_ctx_t lsm;
 	my_data.lsm_err = lsm_init(&lsm, &hi2c1);
-
-
 
 	// LIS3MDL
 	stmdev_ctx_t lis;
@@ -140,12 +194,7 @@ void appmain(){
 	one_wire_start_convertion(bus);
 	uint32_t get_time = HAL_GetTick();
 
-	// resistor
-
-	// мультплексер CD4051
-
 	// sd
-
 	FATFS fileSystem; // переменная типа FATFS
 	FIL binFile, csvFile; // хендлер файла
     UINT testBytes;  // Количество записанных байт
@@ -156,7 +205,7 @@ void appmain(){
     uint8_t bin_path[] = "grib.bin\0";
     uint8_t csv_path[] = "grib.csv\0";
     char str_buffer[300] = {0};
-    char str_header[300] = "number_packet; time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_longitude; ne06mv2_latitude; neo6mv2_fix; scd41; mq_4; me2o2;\n";
+    char str_header[300] = "number_packet; time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_latitude; ne06mv2_longitude; ne06mv2_height; ne06mv2_fix; scd41; mq_4; me2o2;\n";
     /*int mount_attemps;
     for(mount_attemps = 0; mount_attemps < 5; mount_attemps++)
     {
@@ -167,24 +216,19 @@ void appmain(){
         }
     }*/
 
-	//e220-400t22s
-
     // scd41
-
     scd41_start_measurement(&hi2c1);
     uint16_t co2 = 0;
 	float temp = 0;
 	float pressure = 0;
     scd41_read_measurement(&co2, &temp, &pressure, &hi2c1);
 
-
     //neo6mv2
-
     neo6mv2_Init();
     __HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE);
     __HAL_UART_ENABLE_IT(&huart1, UART_IT_ERR);
 
-	//
+	// e220-400t22s
 	e220_pins_t e220_bus;
 	e220_bus.m0_pinchik = GPIO_PIN_1;
 	e220_bus.m1_pinchik = GPIO_PIN_0;
@@ -206,16 +250,22 @@ void appmain(){
     e220_set_reg3(e220_bus, E220_REG3_RSSI_BYTE_OFF, E220_REG3_TRANS_M_TRANSPARENT, E220_REG3_LBT_EN_OFF, E220_REG3_WOR_CYCLE_500);
     e220_set_mode(e220_bus, E220_MODE_TM);
 
-    //char helloworld3[25] = "Bye, Anton! [FIX]";
     float result;
 	float mq_result;
 	float me2o2_result;
+
+	float lux = 0;
+
+	uint32_t get_time_burner = HAL_GetTick();
+	#define BURNER_TIME 5000
+	mission_state_t device_condition = MS_PREPARATION;
 
 	while(1){
 		// BMP280
 		bme280_get_sensor_data(BME280_ALL, &data, &bmp); // вывод давления и температуры
 		packet.pressure_bmp280 = data.pressure;
 		packet.temp_bmp280 = data.temperature * 100;
+		float altitude = 44330 * (1- pow(data.pressure/pressure_zero, 1/5.255));
 		// LSM6DS3
 		my_data.gyro_error = lsm6ds3_angular_rate_raw_get(&lsm, temp_gyro);
 		packet.angular_x = temp_gyro[0];
@@ -238,19 +288,26 @@ void appmain(){
 			packet.ds18b20 = ds18b20_read_temp(bus);
 			one_wire_start_convertion(bus);
 		}
-		// resistor
+
+		/*
+		 * мультиплексор
+		 * (1) - фоторезистор
+		 * (2) - датчик метана
+		 * (3) - датчик кислорода
+		 */
+
+		// (1)
 		cd4051_change_ch(0);
 		megalux(&hadc1, &result);
 		packet.photoresistor = result;
-
+		// (2)
 		cd4051_change_ch(1);
 		mq4_ppm(&hadc1, &mq_result);
 		packet.mq_4 = mq_result;
-
+		// (3)
 		cd4051_change_ch(2);
 		me2o2f20_read(&hadc1, &me2o2_result);
 		packet.me2o2 = me2o2_result;
-
 
 		//neo6mv2
 		neo6mv2_work();
@@ -260,15 +317,57 @@ void appmain(){
 		packet.neo6mv2_height = gps_data.altitude;
 		packet.neo6mv2_fix = gps_data.fixQuality;
 
+
+
+
+	    switch (device_condition){
+	        case MS_PREPARATION:
+	        	if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
+	        	{
+	        		lux = packet.photoresistor * 0.8;
+	        		device_condition = MS_PREPARATION;
+	        	}
+	            break;
+	        case MS_BEFORE_LAYING:
+	        	if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET){
+	        		device_condition = MS_FLIGHT_IN_THE_ROCKET;
+	        	}
+	            break;
+	        case MS_FLIGHT_IN_THE_ROCKET:
+	        	if(packet.photoresistor > lux)
+	        	{
+	        		device_condition = MS_DESCENT_A;
+	        	}
+	            break;
+	        case MS_DESCENT_A:
+	        	if(altitude <= 100.0){
+	        		burner_status(1);
+	        		get_time_burner = HAL_GetTick();
+	        		device_condition = MS_DESCENT_B;
+	        	}
+	            break;
+	        case MS_DESCENT_B:
+        		if(get_time_burner + BURNER_TIME < HAL_GetTick()){
+        			burner_status(0);
+        			piezospeaker_status(1);
+        			device_condition = MS_DESCENT_C;
+        		}
+	            break;
+	        case MS_DESCENT_C:
+	            break;
+	        default:
+	        	device_condition = MS_ROUT;
+	    }
+
 		packet.time = HAL_GetTick();
 		packet.number_packet++;
 		packet.cheksum_org = xorBlock((uint8_t *)&packet, 26);
 		packet.checksum_grib = xorBlock((uint8_t *)&packet, sizeof(packet_t) - 1);
 
+		// e220-400t22s
 	    e220_send_packet(e220_bus, 0xFFFF, (uint8_t *)&packet, sizeof(packet_t), 23);
 
 		//sd
-
 		if (mount_res != FR_OK){
 			f_mount(NULL, "", 0);
 			mount_res = f_mount(&fileSystem, "", 1);
@@ -292,15 +391,12 @@ void appmain(){
 			f_close(&csvFile);
 			csv_res = f_open(&csvFile, (char*)csv_path, FA_WRITE | 0x30);
 			csv_res = f_write(&csvFile, str_header, 300, &testBytes);
-			//f_puts("time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_longitude; ne06mv2_latitude; neo6mv2_fix; scd41; mq_4; me2o2;\n", &csvFile);
 		}
 		if (mount_res == FR_OK && csv_res == FR_OK)
 		{
-			uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;\n", packet.number_packet , packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.neo6mv2_height * 1000), (long int)(packet.neo6mv2_longitude * 1000), (long int)(packet.neo6mv2_latitude * 1000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2);
+			uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;\n", packet.number_packet , packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.neo6mv2_latitude * 1000000), (long int)(packet.neo6mv2_longitude * 1000000), (long int)(packet.neo6mv2_height * 1000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2);
 			csv_res = f_write(&csvFile, str_buffer, csv_write, &testBytes);
 			f_sync(&csvFile);
 		}
 	}
 }
-
-

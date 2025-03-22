@@ -5,6 +5,7 @@
  *      Author: user
  */
 #include "bmp.h"
+
 #include "../I2C_crutch/i2c-crutch.h"
 
 #define BME280_I2C_ADDRESS (0b1110110 << 1) // читаю, поэтому сдвигаю на единицу
