@@ -18,8 +18,8 @@
 typedef int8_t SCD41_RET_TYPE;
 
 uint8_t sensirion_common_generate_crc(const uint8_t* data, uint16_t count);
-SCD41_RET_TYPE scd41_write(uint16_t cmd, I2C_HandleTypeDef *hi2c1);
-SCD41_RET_TYPE scd41_read(uint8_t *data, uint32_t len, I2C_HandleTypeDef *hi2c1);
+SCD41_RET_TYPE scd41_write(uint16_t cmd, uint16_t data, I2C_HandleTypeDef *hi2c1);
+SCD41_RET_TYPE scd41_read(uint16_t cmd, uint16_t *data, uint16_t len, I2C_HandleTypeDef *hi2c1);
 void scd_delay(uint32_t period, I2C_HandleTypeDef *hi2c1);
 SCD41_RET_TYPE scd41_send(uint16_t cmd, I2C_HandleTypeDef *hi2c1);
 void scd_delay(uint32_t period, I2C_HandleTypeDef *hi2c1);

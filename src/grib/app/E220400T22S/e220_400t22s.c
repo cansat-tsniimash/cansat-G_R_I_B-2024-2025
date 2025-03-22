@@ -75,12 +75,11 @@ void e220_set_reg3(e220_pins_t e220_bus, uint8_t rssi_byte, uint8_t trans_m, uin
 
 void e220_send_packet(e220_pins_t e220_bus, uint16_t addr, uint8_t *reg_data, uint16_t len, uint8_t target_channel){
 	e220_set_mode(e220_bus, E220_MODE_TM);
-	HAL_Delay(200);
 	uint16_t try = 0;
 	HAL_UART_Transmit(e220_bus.uart, (uint8_t *)&addr, 2, 100);
 	HAL_UART_Transmit(e220_bus.uart, (uint8_t *)&target_channel, 1, 100);
 	HAL_UART_Transmit(e220_bus.uart, reg_data, len, 100);
-	while((HAL_GPIO_ReadPin(e220_bus.aux_port, e220_bus.aux_pin) == GPIO_PIN_RESET) && (try < 200)){
+	while((HAL_GPIO_ReadPin(e220_bus.aux_port, e220_bus.aux_pin) == GPIO_PIN_RESET) && (try < 20)){
 		try++;
 		HAL_Delay(1);
 	}

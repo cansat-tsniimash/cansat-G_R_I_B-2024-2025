@@ -21,7 +21,7 @@
  * (сделать)
  * пьезодинамик (пины поменять)
  * пережигатель (пины поменять)
- *
+ * оптимизация кода (ВАЖНО!)
  */
 
 #include <stm32f1xx.h>
@@ -216,13 +216,6 @@ void appmain(){
         }
     }*/
 
-    // scd41
-    scd41_start_measurement(&hi2c1);
-    uint16_t co2 = 0;
-	float temp = 0;
-	float pressure = 0;
-    scd41_read_measurement(&co2, &temp, &pressure, &hi2c1);
-
     //neo6mv2
     neo6mv2_Init();
     __HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE);
@@ -308,6 +301,15 @@ void appmain(){
 		cd4051_change_ch(2);
 		me2o2f20_read(&hadc1, &me2o2_result);
 		packet.me2o2 = me2o2_result;
+
+	    // scd41
+	    uint16_t co2 = 0;
+		float temp = 0;
+		float pressure = 0;
+		scd41_init();
+	    //scd41_start_measurement(&hi2c1);
+	    scd41_read_measurement(&co2, &temp, &pressure, &hi2c1);
+	    packet.scd41 = co2;
 
 		//neo6mv2
 		neo6mv2_work();
