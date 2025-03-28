@@ -6,21 +6,23 @@
  */
 
 /*
- * (почти готово/готово)
+ * (проверить)
  * lsm6ds3 (проверить)
  * lis3mdl (проверить)
- * scd41 (допилить и проверить)
  * фоторезистор (проверить)
  * me2o2f20 (проверить)
  * mq-4 (проверить)
- * e220-400t22s (вроде допилить и проверить)
- * neo6mv2 (дополить и проверить)
  * ds18b20 (проверить)
- * micro-sd (допилить и проверить)
- * bmp280 (проверить)
- * (сделать)
- * пьезодинамик (пины поменять)
- * пережигатель (пины поменять)
+ *
+ * (готово и работает)
+ * пьезодинамик (пины поменял / работает)
+ * пережигатель (пины поменял)
+ * scd41 (работает, но чутка доделать)
+ * e220-400t22s (работает, но надо доделать наземку)
+ * micro-sd (работает, но надо доделать)
+ * neo6mv2 (работает)
+ * bmp280 (работает)
+ *
  * оптимизация кода (ВАЖНО!)
  */
 
@@ -234,7 +236,7 @@ void appmain(){
 
     e220_set_addr(e220_bus, 0xFFFF);
     HAL_Delay(100);
-    e220_set_reg0(e220_bus, E220_REG0_AIR_RATE_2400, E220_REG0_PARITY_8N1_DEF, E220_REG0_PORT_RATE_9600);
+    e220_set_reg0(e220_bus, E220_REG0_AIR_RATE_9600, E220_REG0_PARITY_8N1_DEF, E220_REG0_PORT_RATE_9600);
     HAL_Delay(100);
     e220_set_reg1(e220_bus, E220_REG1_PACKET_LEN_200B, E220_REG1_RSSI_OFF, E220_REG1_TPOWER_22);
     HAL_Delay(100);
@@ -253,7 +255,10 @@ void appmain(){
 	#define BURNER_TIME 5000
 	mission_state_t device_condition = MS_PREPARATION;
 
+	scd41_init();
+
 	while(1){
+		//HAL_Delay(100);
 		// BMP280
 		bme280_get_sensor_data(BME280_ALL, &data, &bmp); // вывод давления и температуры
 		packet.pressure_bmp280 = data.pressure;
@@ -289,6 +294,7 @@ void appmain(){
 		 * (3) - датчик кислорода
 		 */
 
+
 		// (1)
 		cd4051_change_ch(0);
 		megalux(&hadc1, &result);
@@ -306,10 +312,10 @@ void appmain(){
 	    uint16_t co2 = 0;
 		float temp = 0;
 		float pressure = 0;
-		scd41_init();
 	    //scd41_start_measurement(&hi2c1);
-	    scd41_read_measurement(&co2, &temp, &pressure, &hi2c1);
-	    packet.scd41 = co2;
+	    if(scd41_read_measurement(&co2, &temp, &pressure, &hi2c1) == 0){
+	    	 packet.scd41 = co2;
+	    }
 
 		//neo6mv2
 		neo6mv2_work();
@@ -319,9 +325,7 @@ void appmain(){
 		packet.neo6mv2_height = gps_data.altitude;
 		packet.neo6mv2_fix = gps_data.fixQuality;
 
-
-
-
+		// Состояние аппарата
 	    switch (device_condition){
 	        case MS_PREPARATION:
 	        	if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
@@ -369,7 +373,7 @@ void appmain(){
 		// e220-400t22s
 	    e220_send_packet(e220_bus, 0xFFFF, (uint8_t *)&packet, sizeof(packet_t), 23);
 
-		//sd
+		// sd
 		if (mount_res != FR_OK){
 			f_mount(NULL, "", 0);
 			mount_res = f_mount(&fileSystem, "", 1);

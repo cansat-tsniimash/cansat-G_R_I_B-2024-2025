@@ -99,7 +99,6 @@ void scd_delay(uint32_t period, I2C_HandleTypeDef *hi2c1){
 }
 
 SCD41_RET_TYPE scd41_start_measurement(I2C_HandleTypeDef *hi2c1){
-	//return scd41_send(start_periodic_measurement, hi2c1);
 	SCD41_RET_TYPE status = scd41_send(start_periodic_measurement, hi2c1);
     dwt_delay_us(1000000);
     return status;
@@ -133,15 +132,14 @@ SCD41_RET_TYPE scd41_write_cmd(uint16_t cmd, uint16_t data, I2C_HandleTypeDef *h
 SCD41_RET_TYPE scd41_read_measurement(uint16_t *co2, float *temp, float *pressure, I2C_HandleTypeDef *hi2c1){
 	uint16_t status = 0xFFFF;
 	uint16_t data[3];
-    int retry_count = 0;
 
 	if (scd41_read(get_data_ready_status, &status, 1, hi2c1)) {
 		return 1;
 	}
 
-	/*if (status & 0x03) {
+	if (status == 0x8000) {
 		return 2;
-	}*/
+	}
 
     if (scd41_read(read_measurement, data, 3, hi2c1)) {
         return 1;
@@ -166,10 +164,8 @@ SCD41_RET_TYPE scd41_set_pressure(uint16_t pressure, I2C_HandleTypeDef *hi2c1){
     return scd41_write_cmd(set_ambient_pressure, pressure, hi2c1);
 }
 
-
 void scd41_init(){
 	dwt_delay_init();
 	scd41_start_measurement(&hi2c1);
 	dwt_delay_us(1000000);
-
 }
