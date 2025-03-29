@@ -7,21 +7,23 @@
 
 /*
  * (проверить)
- * lsm6ds3 (проверить)
+
  * lis3mdl (проверить)
- * фоторезистор (проверить)
  * me2o2f20 (проверить)
  * mq-4 (проверить)
- * ds18b20 (проверить)
  *
  * (готово и работает)
  * пьезодинамик (пины поменял / работает)
  * пережигатель (пины поменял)
- * scd41 (работает, но чутка доделать)
+ * scd41 (работает)
  * e220-400t22s (работает, но надо доделать наземку)
- * micro-sd (работает, но надо доделать)
+ * micro-sd (работает)
  * neo6mv2 (работает)
  * bmp280 (работает)
+ * lsm6ds3 (работает)
+ * ds18b20 (работает)
+ * фоторезистор (работает)
+ * переключатель (работает)
  *
  * оптимизация кода (ВАЖНО!)
  */
@@ -58,6 +60,9 @@
 
 #define BURNER_PIN GPIO_PIN_4
 #define BURNER_PORT GPIOB
+
+#define SWITCH_PIN GPIO_PIN_1
+#define SWITCH_PORT GPIOA
 
 // обработчики для ADC, I2C и UART1/UART2
 extern ADC_HandleTypeDef hadc1;
@@ -207,7 +212,7 @@ void appmain(){
     uint8_t bin_path[] = "grib.bin\0";
     uint8_t csv_path[] = "grib.csv\0";
     char str_buffer[300] = {0};
-    char str_header[300] = "number_packet; time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_latitude; ne06mv2_longitude; ne06mv2_height; ne06mv2_fix; scd41; mq_4; me2o2;\n";
+    char str_header[330] = "number_packet; time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; checksum_org; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_latitude; ne06mv2_longitude; ne06mv2_height; ne06mv2_fix; scd41; mq_4; me2o2; checksum_grib;\n";
     /*int mount_attemps;
     for(mount_attemps = 0; mount_attemps < 5; mount_attemps++)
     {
@@ -250,6 +255,7 @@ void appmain(){
 	float me2o2_result;
 
 	float lux = 0;
+	int lux_cnt = 0;
 
 	uint32_t get_time_burner = HAL_GetTick();
 	#define BURNER_TIME 5000
@@ -298,7 +304,7 @@ void appmain(){
 		// (1)
 		cd4051_change_ch(0);
 		megalux(&hadc1, &result);
-		packet.photoresistor = result;
+		packet.photoresistor = result * 1000;
 		// (2)
 		cd4051_change_ch(1);
 		mq4_ppm(&hadc1, &mq_result);
@@ -328,21 +334,25 @@ void appmain(){
 		// Состояние аппарата
 	    switch (device_condition){
 	        case MS_PREPARATION:
-	        	if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET)
+	        	if (HAL_GPIO_ReadPin(SWITCH_PORT, SWITCH_PIN) == GPIO_PIN_RESET)
 	        	{
 	        		lux = packet.photoresistor * 0.8;
-	        		device_condition = MS_PREPARATION;
+	        		device_condition = MS_BEFORE_LAYING;
 	        	}
 	            break;
 	        case MS_BEFORE_LAYING:
-	        	if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET){
+	        	if(HAL_GPIO_ReadPin(SWITCH_PORT, SWITCH_PIN) == GPIO_PIN_SET){
 	        		device_condition = MS_FLIGHT_IN_THE_ROCKET;
+	        		lux_cnt = 0;
 	        	}
 	            break;
 	        case MS_FLIGHT_IN_THE_ROCKET:
 	        	if(packet.photoresistor > lux)
 	        	{
-	        		device_condition = MS_DESCENT_A;
+	        		lux_cnt++;
+	        		if(lux_cnt > 2){
+	        			device_condition = MS_DESCENT_A;
+	        		}
 	        	}
 	            break;
 	        case MS_DESCENT_A:
@@ -364,6 +374,7 @@ void appmain(){
 	        default:
 	        	device_condition = MS_ROUT;
 	    }
+	    packet.state = device_condition;
 
 		packet.time = HAL_GetTick();
 		packet.number_packet++;
@@ -400,7 +411,7 @@ void appmain(){
 		}
 		if (mount_res == FR_OK && csv_res == FR_OK)
 		{
-			uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;\n", packet.number_packet , packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.neo6mv2_latitude * 1000000), (long int)(packet.neo6mv2_longitude * 1000000), (long int)(packet.neo6mv2_height * 1000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2);
+			uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;%d;\n", packet.number_packet, packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.cheksum_org, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.neo6mv2_height * 1000), (long int)(packet.neo6mv2_latitude * 1000000), (long int)(packet.neo6mv2_longitude * 1000000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2, packet.checksum_grib);
 			csv_res = f_write(&csvFile, str_buffer, csv_write, &testBytes);
 			f_sync(&csvFile);
 		}

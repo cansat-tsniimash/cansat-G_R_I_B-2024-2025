@@ -73,7 +73,7 @@ file_bin = open("log/grib.bin", "wb")
 
 
 file_csv = open("log/grib.csv", "w")
-file_csv.write("number_packet; time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_latitude; ne06mv2_longitude; ne06mv2_height; neo6mv2_fix; scd41; mq_4; me2o2;\n")
+file_csv.write("start; team_id; time; temp_bmp280; pressure_bmp280; acceleration_x; acceleration_y; acceleration_z; angular_x; angular_y; angular_z; cheksum_org; number_packet; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; neo6mv2_latitude; neo6mv2_latitude; neo6mv2_height; neo6mv2_fix; scd41; mq_4; me2o2; checksum_grib;\n")
 
 def xor_block(data):
     result = 0x00 
@@ -155,7 +155,9 @@ while True:
 			print(buf[:60])
 			pack = struct.unpack("<2HIhI6hBHBH4h3fB3HB", buf[:60])
 			if xor_block(buf[:60-1]) == pack[26]:
-				file_csv.write(str(pack))
+				for num in pack:
+					file_csv.write(str(num) + ";") 
+				file_csv.write("\n")
 				print("Контрольная сумма сошлась")
 				print("Н.пакета", pack[12])
 				print("Время:", pack[2])
@@ -164,7 +166,7 @@ while True:
 				print("Ускор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*[num * 488 / 1000 / 1000 for num in pack[5:8]]))
 				print("Угл.скор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*[num * 70 / 1000 for num in pack[8:11]]))
 				print("Сост.апарт", pack[13])
-				print("Фото.рез", pack[14])
+				print("Фото.рез {:2.2f}" .format(pack[14] / 1000))
 				print("Магнит.поле", [num / 1711 for num in pack[15:18]])
 				print("Темп DS18 {:4.2f}".format(pack[18]/16))
 				print("GPS {:3.6f} {:3.6f} {:4.2f}".format(*pack[19:22]))
