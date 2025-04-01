@@ -2,6 +2,7 @@ import RPi.GPIO as GPIO
 import struct
 from time import sleep
 import serial
+import datetime
 
 E220_M0_PIN = 23
 E220_M1_PIN = 24
@@ -65,14 +66,15 @@ GPIO.setup(E220_M0_PIN, GPIO.OUT)
 GPIO.setup(E220_M1_PIN, GPIO.OUT)
 GPIO.setup(E220_AUX_PIN, GPIO.IN)
 
-
+current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
 
 port = serial.Serial("/dev/ttyUSB0", baudrate=9600, timeout=0.3)
 
-file_bin = open("log/grib.bin", "wb")
+binfile = f"log/grib_{current_datetime}.bin"
+file_bin = open(binfile, "wb")
 
-
-file_csv = open("log/grib.csv", "w")
+csvfile = f"log/grib_{current_datetime}.csv"
+file_csv = open(csvfile, "w")
 file_csv.write("start; team_id; time; temp_bmp280; pressure_bmp280; acceleration_x; acceleration_y; acceleration_z; angular_x; angular_y; angular_z; cheksum_org; number_packet; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; neo6mv2_latitude; neo6mv2_latitude; neo6mv2_height; neo6mv2_fix; scd41; mq_4; me2o2; checksum_grib;\n")
 
 def xor_block(data):
