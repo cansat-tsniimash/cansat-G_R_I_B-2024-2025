@@ -10,7 +10,7 @@
 #include "cyclebuffer.h"
 
 
-#define NEO6M2_RXBUFFER_SIZE 128
+#define NEO6M2_RXBUFFER_SIZE (128)
 
 static GPS_Data gpsData;
 static char rxBuffer[NEO6M2_RXBUFFER_SIZE];
@@ -30,13 +30,14 @@ void neo6mv2_Init(){
     gpsData.speed = 0.0f;
     gpsData.satellites = 0;
     gpsData.fixQuality = 0;
+    gpsData.cookie = 0;
     strcpy(gpsData.time, "000000.00");
     strcpy(gpsData.date, "010100");
 
     sbuffer_init(&gps_buffer);
 }
 
-void neo6mv2_work()
+int neo6mv2_work()
 {
 	int i;
 
@@ -68,15 +69,18 @@ void neo6mv2_work()
 			break;
 		}
 	}
-	if (!flag)
-		return;
+	if ((!flag) && (rxIndex < NEO6M2_RXBUFFER_SIZE))
+		return 1;
 
 
 
 	neo6mv2_ParseLine(rxBuffer);
 
 	rxBuffer[0] = 0;
-	memset(rxBuffer, 0x00, i);
+	for (int j = 0; j < rxIndex - i; j++)
+		rxBuffer[j] = rxBuffer[j+i];
+	rxIndex -= i;
+	return 0;
 
 }
 
@@ -92,6 +96,8 @@ uint8_t neo6mv2_ParseLine(char* line){
 	for (int i = 0; i < 5; i++)
 		if (line[i + 1] != buf[i])
 			return 0;
+
+    gpsData.cookie++;
 	return neo6mv2_ParseGPGGA(line);
     /*if (strstr(line, "$GPRMC")) {
         //return neo6mv2_ParseGPRMC(line);

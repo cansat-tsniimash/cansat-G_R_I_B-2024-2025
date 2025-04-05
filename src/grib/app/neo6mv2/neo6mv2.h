@@ -28,10 +28,11 @@ typedef struct {
     int fixQuality;
     char time[10];
     char date[7];
+    int cookie;
 } GPS_Data;
 
 void neo6mv2_Init();
-void neo6mv2_work();
+int neo6mv2_work();
 void neo6mv2_pushbyte(uint8_t byte);
 
 uint8_t neo6mv2_ParseLine(char* line);

@@ -15,9 +15,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#define SBUFFER_SIZE (1000)
 
 typedef struct cbuffer_t{
-	uint8_t data[100];
+	uint8_t data[SBUFFER_SIZE];
     size_t head;
     size_t tail;
 } cbuffer_t;
