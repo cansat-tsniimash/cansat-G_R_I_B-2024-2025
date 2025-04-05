@@ -1526,7 +1526,7 @@ int32_t lsm6ds3_temperature_raw_get(stmdev_ctx_t *ctx, int16_t *val)
   */
 int32_t lsm6ds3_angular_rate_raw_get(stmdev_ctx_t *ctx, int16_t *val)
 {
-  uint8_t buff[6];
+  uint8_t buff[6] = {0};
   int32_t ret;
 
   ret = lsm6ds3_read_reg(ctx, LSM6DS3_OUTX_L_G, buff, 6);
@@ -1551,7 +1551,7 @@ int32_t lsm6ds3_angular_rate_raw_get(stmdev_ctx_t *ctx, int16_t *val)
   */
 int32_t lsm6ds3_acceleration_raw_get(stmdev_ctx_t *ctx, int16_t *val)
 {
-  uint8_t buff[6];
+  uint8_t buff[6] = {0};
   int32_t ret;
 
   ret = lsm6ds3_read_reg(ctx, LSM6DS3_OUTX_L_XL, buff, 6);

@@ -8,7 +8,7 @@
 /*
  * (проверить)
 
- * lis3mdl (проверить)
+ * lis3mdl (работает)
  * me2o2f20 (проверить)
  * mq-4 (проверить)
  *
@@ -115,16 +115,12 @@ void burner_status(uint8_t status){
 
 // структура для хранения данных с датчиков
 typedef struct{
-	float temp;
-	float pressure;
-	float accel[3];
-	float gyro[3];
-	float magn[3];
 	uint8_t accel_error;
 	uint8_t gyro_error;
 	uint8_t magn_error;
 	uint8_t lis_err;
 	uint8_t lsm_err;
+	uint8_t scd_temp;
 } data_t;
 
 // структура для хранения и передачи телеметрии
@@ -161,13 +157,14 @@ typedef struct{
 #pragma pack(pop) // Компилятор может добавлять выравнивающие байты для оптимизации работы процессора
 
 void appmain(){
+	int i;
 	piezospeaker_status(0);
 	packet_t packet = {0};
 	packet.start = 0xAAAA;
 	packet.number_packet = 0;
 	volatile data_t my_data;
-	int16_t temp_gyro[3]; // temp = ВРЕМЕННО!
-	int16_t temp_accel[3];
+	int16_t temp_gyro[3] = {0}; // temp = ВРЕМЕННО!
+	int16_t temp_accel[3] = {0};
 
 	// BMP280
 	bme280_dev_t bmp;
@@ -190,7 +187,7 @@ void appmain(){
 	// LIS3MDL
 	stmdev_ctx_t lis;
 	my_data.lis_err = lis_init(&lis, &hi2c1);
-	int16_t temp_magn[3];
+	int16_t temp_magn[3] = {0};
 
 	// DS18B20
 	one_wire_bus_t bus;
@@ -203,16 +200,17 @@ void appmain(){
 
 	// sd
 	FATFS fileSystem; // переменная типа FATFS
-	FIL binFile, csvFile; // хендлер файла
+	FIL binFile;
+	//csvFile; // хендлер файла
     UINT testBytes;  // Количество записанных байт
 
     FRESULT mount_res = 255;
     FRESULT bin_res = 255;
-    FRESULT csv_res = 255;
+    //FRESULT csv_res = 255;
     uint8_t bin_path[] = "grib.bin\0";
-    uint8_t csv_path[] = "grib.csv\0";
-    char str_buffer[300] = {0};
-    char str_header[330] = "number_packet; time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; checksum_org; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_latitude; ne06mv2_longitude; ne06mv2_height; ne06mv2_fix; scd41; mq_4; me2o2; checksum_grib;\n";
+    //uint8_t csv_path[] = "grib.csv\0";
+    //char str_buffer[300] = {0};
+    //char str_header[330] = "number_packet; time; temp_bmp280; pressure_bmp280; acceleration x; acceleration y; acceleration z; angular x; angular y; angular z; checksum_org; state; photoresistor; lis3mdl_x; lis3mdl_y; lis3mdl_z; ds18b20; ne06mv2_height; ne06mv2_latitude; ne06mv2_longitude; ne06mv2_height; ne06mv2_fix; scd41; mq_4; me2o2; checksum_grib;\n";
     /*int mount_attemps;
     for(mount_attemps = 0; mount_attemps < 5; mount_attemps++)
     {
@@ -270,6 +268,7 @@ void appmain(){
 		packet.pressure_bmp280 = data.pressure;
 		packet.temp_bmp280 = data.temperature * 100;
 		float altitude = 44330 * (1- pow(data.pressure/pressure_zero, 1/5.255));
+
 		// LSM6DS3
 		my_data.gyro_error = lsm6ds3_angular_rate_raw_get(&lsm, temp_gyro);
 		packet.angular_x = temp_gyro[0];
@@ -318,13 +317,18 @@ void appmain(){
 	    uint16_t co2 = 0;
 		float temp = 0;
 		float pressure = 0;
-	    //scd41_start_measurement(&hi2c1);
-	    if(scd41_read_measurement(&co2, &temp, &pressure, &hi2c1) == 0){
+		my_data.scd_temp = scd41_read_measurement(&co2, &temp, &pressure, &hi2c1);
+	    if(my_data.scd_temp == 0){
 	    	 packet.scd41 = co2;
 	    }
 
 		//neo6mv2
-		neo6mv2_work();
+	    for (i = 0; i < 50; i++)
+	    {
+	    	if (neo6mv2_work())
+	    		break;
+	    }
+
 		GPS_Data gps_data = neo6mv2_GetData();
 		packet.neo6mv2_latitude = gps_data.latitude;
 		packet.neo6mv2_longitude = gps_data.longitude;
@@ -374,7 +378,20 @@ void appmain(){
 	        default:
 	        	device_condition = MS_ROUT;
 	    }
-	    packet.state = device_condition;
+	    packet.state = device_condition & 0x07;
+	    packet.state |= (gps_data.cookie & 0x01) << 3;
+	    if(my_data.scd_temp == 1){
+	    	packet.state |= 1 << 4;
+	    }
+	    if(my_data.magn_error != 0){
+	    	packet.state |= 1 << 5;
+	    }
+	    if(my_data.lsm_err != 0){
+	    	packet.state |= 1 << 6;
+	    }
+	    if(bmp.intf_rslt != 0){
+	    	packet.state |= 1 << 7;
+	    }
 
 		packet.time = HAL_GetTick();
 		packet.number_packet++;
@@ -389,8 +406,8 @@ void appmain(){
 			f_mount(NULL, "", 0);
 			mount_res = f_mount(&fileSystem, "", 1);
 			bin_res = f_open(&binFile, (char*)bin_path, FA_WRITE | 0x30);
-			csv_res = f_open(&csvFile, (char*)csv_path, FA_WRITE | 0x30);
-			csv_res = f_write(&csvFile, str_header, 300, &testBytes);
+			//csv_res = f_open(&csvFile, (char*)csv_path, FA_WRITE | 0x30);
+			//csv_res = f_write(&csvFile, str_header, 300, &testBytes);
 		}
 
 		if  (mount_res == FR_OK && bin_res != FR_OK){
@@ -404,16 +421,16 @@ void appmain(){
 			f_sync(&binFile);
 		}
 
-		if  (mount_res == FR_OK && csv_res != FR_OK){
+		/*if  (mount_res == FR_OK && csv_res != FR_OK){
 			f_close(&csvFile);
 			csv_res = f_open(&csvFile, (char*)csv_path, FA_WRITE | 0x30);
-			csv_res = f_write(&csvFile, str_header, 300, &testBytes);
+			//csv_res = f_write(&csvFile, str_header, 300, &testBytes);
 		}
 		if (mount_res == FR_OK && csv_res == FR_OK)
 		{
-			uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;%d;\n", packet.number_packet, packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.cheksum_org, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.neo6mv2_height * 1000), (long int)(packet.neo6mv2_latitude * 1000000), (long int)(packet.neo6mv2_longitude * 1000000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2, packet.checksum_grib);
-			csv_res = f_write(&csvFile, str_buffer, csv_write, &testBytes);
-			f_sync(&csvFile);
-		}
+			//uint16_t csv_write = snprintf(str_buffer, 300, "%d;%ld;%d;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%ld;%ld;%ld;%d;%d;%d;%d;%d;\n", packet.number_packet, packet.time, packet.temp_bmp280, packet.pressure_bmp280, packet.acceleration_x, packet.acceleration_y, packet.acceleration_z, packet.angular_x, packet.angular_y, packet.angular_z, packet.cheksum_org, packet.state, packet.photoresistor, packet.lis3mdl_x, packet.lis3mdl_y, packet.lis3mdl_z, packet.ds18b20, (long int)(packet.neo6mv2_height * 1000), (long int)(packet.neo6mv2_latitude * 1000000), (long int)(packet.neo6mv2_longitude * 1000000), packet.neo6mv2_fix, packet.scd41, packet.mq_4, packet.me2o2, packet.checksum_grib);
+			//csv_res = f_write(&csvFile, str_buffer, csv_write, &testBytes);
+			//f_sync(&csvFile);
+		}*/
 	}
 }

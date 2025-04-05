@@ -15,7 +15,7 @@ typedef int32_t (*stmdev_read_ptr)(void *, uint8_t, uint8_t *, uint16_t);
 typedef int32_t (*stmdev_write_ptr)(void *, uint8_t, const uint8_t *, uint16_t);
 
 int32_t lis_read(void* handle, uint8_t reg_addr, uint8_t* data_ptr, uint16_t len){
-	int res = HAL_I2C_Master_Transmit(handle, LIS3MDL_I2C_ADDRESS, &reg_addr, 1, 100);
+	HAL_StatusTypeDef res = HAL_I2C_Master_Transmit(handle, LIS3MDL_I2C_ADDRESS, &reg_addr, 1, 100);
     if (res != HAL_OK) {
         I2C_ClearBusyFlagErratum(handle, 100);
         return 1;
@@ -33,7 +33,7 @@ int32_t lis_write(void* handle, uint8_t reg_addr, const uint8_t *data_ptr, uint1
     for (uint16_t i = 0; i < len; i++) {
         lis[0] = reg_addr + i;
         lis[1] = data_ptr[i];
-        int res = HAL_I2C_Master_Transmit(handle, LIS3MDL_I2C_ADDRESS, lis, 2, 100);
+        HAL_StatusTypeDef res = HAL_I2C_Master_Transmit(handle, LIS3MDL_I2C_ADDRESS, lis, 2, 100);
         if (res != HAL_OK) {
             I2C_ClearBusyFlagErratum(handle, 100);
             return 1;

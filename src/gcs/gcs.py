@@ -167,15 +167,18 @@ while True:
 				print("Давл BMP", pack[4])
 				print("Ускор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*[num * 488 / 1000 / 1000 for num in pack[5:8]]))
 				print("Угл.скор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*[num * 70 / 1000 for num in pack[8:11]]))
-				print("Сост.апарт", pack[13])
+				print("Сост.апарт", pack[13] & 0x07)
 				print("Фото.рез {:2.2f}" .format(pack[14] / 1000))
-				print("Магнит.поле", [num / 1711 for num in pack[15:18]])
+				print("Магнит.поле {:4.2f} {:4.2f} {:4.2f}".format(*[num / 1711 for num in pack[15:18]]))
 				print("Темп DS18 {:4.2f}".format(pack[18]/16))
 				print("GPS {:3.6f} {:3.6f} {:4.2f}".format(*pack[19:22]))
 				print("GPS fix", pack[22])
 				print("SCD41", pack[23])
 				print("MQ4", pack[24])
 				print("me2o2f20", pack[25])
+
+
+				print("Состояния gps: {} scd: {} magn: {} lsm: {} bmp: {}".format((pack[13] & (1 << 3)) >> 3, not (pack[13] & (1 << 4)), not (pack[13] & (1 << 5)), not (pack[13] & (1 << 6)), not (pack[13] & (1 << 7))))
 				print(pack)
 				buf = buf[60:]
 			else:

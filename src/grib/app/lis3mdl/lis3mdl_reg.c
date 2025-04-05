@@ -675,7 +675,7 @@ int32_t lis3mdl_mag_data_ovr_get(stmdev_ctx_t *ctx, uint8_t *val)
   */
 int32_t lis3mdl_magnetic_raw_get(stmdev_ctx_t *ctx, int16_t *val)
 {
-  uint8_t buff[6];
+  uint8_t buff[6] = {0};
   int32_t ret;
 
   ret = lis3mdl_read_reg(ctx, LIS3MDL_OUT_X_L, (uint8_t *) buff, 6);
@@ -685,6 +685,7 @@ int32_t lis3mdl_magnetic_raw_get(stmdev_ctx_t *ctx, int16_t *val)
   val[1] = (val[1] * 256) + (int16_t)buff[2];
   val[2] = (int16_t)buff[5];
   val[2] = (val[2] * 256) + (int16_t)buff[4];
+
 
   return ret;
 }

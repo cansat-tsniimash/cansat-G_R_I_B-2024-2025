@@ -45,7 +45,6 @@ void e220_write_reg(e220_pins_t pin, uint8_t *reg_data, uint8_t reg_addr){
 		try++;
 		HAL_Delay(1);
 	}
-
 }
 
 void e220_set_addr(e220_pins_t e220_bus, uint16_t addr){
