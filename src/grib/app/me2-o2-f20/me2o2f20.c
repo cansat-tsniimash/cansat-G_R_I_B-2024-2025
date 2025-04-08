@@ -22,10 +22,11 @@ int me2o2f20_read(ADC_HandleTypeDef* hadc, float *o2_percent){
 	uint32_t aboba_o2 = HAL_ADC_GetValue(hadc);
 
 	float voltage = ((float)aboba_o2 / 4095.0f) * 3.3f;
-	float sensor_current = voltage / RL;
-	float oxygen_percentage = sensor_current / SENSITIVITY;
+	//float sensor_current = voltage / RL;
+	//float oxygen_percentage = sensor_current / SENSITIVITY;
 
-	*o2_percent = oxygen_percentage;
+	//*o2_percent = oxygen_percentage;
+	*o2_percent = voltage;
 
 	rc = HAL_ADC_Stop(hadc);
 

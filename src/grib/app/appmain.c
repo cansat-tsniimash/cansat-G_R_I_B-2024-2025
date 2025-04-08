@@ -157,6 +157,8 @@ typedef struct{
 #pragma pack(pop) // Компилятор может добавлять выравнивающие байты для оптимизации работы процессора
 
 void appmain(){
+	burner_status(0);
+
 	int i;
 	piezospeaker_status(0);
 	packet_t packet = {0};
@@ -305,13 +307,14 @@ void appmain(){
 		megalux(&hadc1, &result);
 		packet.photoresistor = result * 1000;
 		// (2)
-		cd4051_change_ch(1);
+		cd4051_change_ch(5);
 		mq4_ppm(&hadc1, &mq_result);
-		packet.mq_4 = mq_result;
+		packet.mq_4 = mq_result * 1000;
+
 		// (3)
 		cd4051_change_ch(2);
 		me2o2f20_read(&hadc1, &me2o2_result);
-		packet.me2o2 = me2o2_result;
+		packet.me2o2 = me2o2_result * 1000;
 
 	    // scd41
 	    uint16_t co2 = 0;

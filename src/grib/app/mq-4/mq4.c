@@ -26,11 +26,13 @@ int mq4_ppm(ADC_HandleTypeDef* hadc, float *mq4_ppm) {
 
     float voltage = raw_adc * (3.3f / 4095.0f);
 
-    float sensor_resistance = (3.3f - voltage) * PL / voltage;
+    *mq4_ppm = voltage;
 
-    float ratio = sensor_resistance / R0;
+    //float sensor_resistance = (3.3f - voltage) * PL / voltage;
 
-    *mq4_ppm = powf(ratio, 1.0f / NAKLON) * SCALE;
+    //float ratio = sensor_resistance / R0;
+
+    //*mq4_ppm = powf(ratio, 1.0f / NAKLON) * SCALE;
 
     return HAL_OK;
 }

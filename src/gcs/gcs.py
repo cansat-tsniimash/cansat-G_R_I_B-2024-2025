@@ -3,6 +3,7 @@ import struct
 from time import sleep
 import serial
 import datetime
+import math
 
 E220_M0_PIN = 23
 E220_M1_PIN = 24
@@ -174,8 +175,8 @@ while True:
 				print("GPS {:3.6f} {:3.6f} {:4.2f}".format(*pack[19:22]))
 				print("GPS fix", pack[22])
 				print("SCD41", pack[23])
-				print("MQ4", pack[24])
-				print("me2o2f20", pack[25])
+				print("MQ4", math.pow(((3.3 - (pack[24] / 1000)) * 20000.0 / (pack[24] / 1000)) / 4000.0, 1.0 / -0.374) * math.pow(10, -1.101 / -0.374))
+				print("me2o2f20", (pack[25] / 1000 / 100000) / 9.52e-6)
 
 
 				print("Состояния gps: {} scd: {} magn: {} lsm: {} bmp: {}".format((pack[13] & (1 << 3)) >> 3, not (pack[13] & (1 << 4)), not (pack[13] & (1 << 5)), not (pack[13] & (1 << 6)), not (pack[13] & (1 << 7))))
