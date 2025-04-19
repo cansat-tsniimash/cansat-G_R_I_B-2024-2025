@@ -1,12 +1,12 @@
-import sys, struct, math, datetime, os, socket, configparser, zipfile
+import sys, struct, math, datetime, os, socket, configparser, zipfile, time
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QListWidget, QStackedWidget, QFrame,
     QGridLayout, QSplitter, QSizePolicy, QTextEdit, QLineEdit,
-    QCheckBox #QFileDialog
+    QCheckBox, QFileDialog, QTabWidget
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QUrl
-from PySide6.QtGui import QPalette, QColor, QPixmap, QFont
+from PySide6.QtGui import QPalette, QColor, QPixmap, QFont, QPainter, QPen
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 
@@ -52,6 +52,9 @@ class TelemetryWorker(QThread):
         self.udp_host = "127.0.0.1"
         self.udp_port = 5005
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Для режима имитации
+        self.sim_enabled   = False
+        self.sim_file_path = ""
         # Логи
         now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         os.makedirs("log", exist_ok=True)
@@ -67,6 +70,14 @@ class TelemetryWorker(QThread):
         for b in data:
             res ^= b
         return res
+
+    @Slot(bool, str)
+    def update_simulation(self, enabled, file_path):
+        """Настройки режима имитации из файла."""
+        self.sim_enabled   = enabled
+        self.sim_file_path = file_path
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.log_ready.emit(f"[{ts}] Simulation: enabled={enabled}, file={file_path}")
 
     @Slot(bool, str, int)
     def update_udp(self, enabled, host, port):
@@ -106,31 +117,43 @@ class TelemetryWorker(QThread):
 
     def run(self):
         buf = b""
-        self.log_ready.emit("Start UDP")
+        self.log_ready.emit("Telemetry thread started")
+
         while self._running:
             try:
-                rcv = self.udp_socket.recv(60*100)
+                if self.sim_enabled and not self.udp_enabled:
+                    # Режим симуляции
+                    rcv = self.sim_f.read(60)
+                    if not rcv:
+                        self.log_ready.emit("[SIM] End of file reached")
+                        break
+                    time.sleep(1)  # чуть-чуть притормозим, как будто приходят данные
+                else:
+                    # Режим UDP
+                    try:
+                        rcv = self.udp_socket.recv(60*100)
+                    except Exception as e:
+                        continue
             except Exception as e:
                 continue
-            self.log_ready.emit(f"Got Data {rcv}")
-            if rcv:
-                buf += rcv
-                self.f_bin.write(rcv)
-                if self._paused:
-                    continue
-                while len(buf) >= 60:
-                    if buf[:2] == b"\xAA\xAA":
-                        chunk = buf[:60]
+
+            self.log_ready.emit(f"[DATA] Got {len(rcv)} bytes")
+            buf += rcv
+
+            if self._paused:
+                continue
+
+            while len(buf) >= 60:
+                if buf[:2] == b"\xAA\xAA":
+                    chunk = buf[:60]
+                    try:
+                        pkt = struct.unpack(STRUCT_FMT, chunk)
+                    except struct.error:
+                        buf = buf[1:]
+                        continue
+                    if self.xor_block(chunk[:-1]) == pkt[-1]:
                         try:
-                            pkt = struct.unpack(STRUCT_FMT, chunk)
-                        except struct.error:
-                            buf = buf[1:]
-                            continue
-                        if self.xor_block(chunk[:-1]) == pkt[-1]:
-                            # сохраняем и эмитим
-                            self.f_csv.write(";".join(str(x) for x in pkt) + "\n")
-                            try:
-                                data = {
+                            data = {
                                 "packet_num": pkt[12],
                                 "timestamp": pkt[2],
                                 "temp_bmp": pkt[3]/100,
@@ -148,21 +171,28 @@ class TelemetryWorker(QThread):
                                 "me2o2": pkt[25],
                                 "crc": pkt[-1]
                             }
-                            except Exception as e:
-                               self.log_ready.emit(f"ошипка {e}")
-                            # UDP
-                            self.data_ready.emit(data)
+                        except Exception as e:
+                            self.log_ready.emit(f"[ERROR] Ошибка парсинга пакета: {e}")
                             buf = buf[60:]
-                        else:
-                            # CRC error
-                            self.error_crc.emit()
-                            self.log_ready.emit("[WARNING] CRC mismatch")
-                            buf = buf[1:]
+                            continue
+                        self.data_ready.emit(data)
+                        self.f_csv.write(";".join(str(x) for x in pkt) + "\n")
+                        self.f_bin.write(chunk)
+                        buf = buf[60:]
                     else:
+                        self.error_crc.emit()
+                        self.log_ready.emit("[WARNING] CRC mismatch")
                         buf = buf[1:]
-        self.f_bin.close()
-        self.f_csv.close()
-        self.log_ready.emit(f"[{datetime.datetime.now()}] TelemetryWorker stopped")
+                else:
+                    buf = buf[1:]
+
+        if self.sim_f:
+            self.sim_f.close()
+            self.f_bin.close()
+            self.f_csv.close()
+            self.log_ready.emit(f"[{datetime.datetime.now()}] TelemetryWorker stopped")
+
+
 
 # === ТЁМНАЯ ТЕМА ===
 def apply_dark_theme(app: QApplication):
@@ -251,32 +281,6 @@ class TelemetryPage(QWidget):
             layout.addWidget(card, i//2 + 1, i%2)
             self.cards[key] = val
 
-        # --- График температуры BMP ---
-        self.temp_index = 0
-        self.series_temp = QLineSeries()
-        chart_temp = QChart()
-        chart_temp.addSeries(self.series_temp)
-        chart_temp.setTitle("Темп BMP, °C")
-        ax_x_t = QValueAxis(); ax_x_t.setLabelFormat("%i"); ax_x_t.setTitleText("Точка")
-        ax_y_t = QValueAxis(); ax_y_t.setLabelFormat("%.2f"); ax_y_t.setTitleText("°C")
-        chart_temp.addAxis(ax_x_t, Qt.AlignBottom); self.series_temp.attachAxis(ax_x_t)
-        chart_temp.addAxis(ax_y_t, Qt.AlignLeft);   self.series_temp.attachAxis(ax_y_t)
-        self.chart_temp_view = QChartView(chart_temp)
-        layout.addWidget(self.chart_temp_view, 9, 0)
-
-        # --- График величины ускорения ---
-        self.acc_index = 0
-        self.series_acc = QLineSeries()
-        chart_acc = QChart()
-        chart_acc.addSeries(self.series_acc)
-        chart_acc.setTitle("Величина ускорения, g")
-        ax_x_a = QValueAxis(); ax_x_a.setLabelFormat("%i"); ax_x_a.setTitleText("Точка")
-        ax_y_a = QValueAxis(); ax_y_a.setLabelFormat("%.2f"); ax_y_a.setTitleText("g")
-        chart_acc.addAxis(ax_x_a, Qt.AlignBottom); self.series_acc.attachAxis(ax_x_a)
-        chart_acc.addAxis(ax_y_a, Qt.AlignLeft);   self.series_acc.attachAxis(ax_y_a)
-        self.chart_accel_view = QChartView(chart_acc)
-        layout.addWidget(self.chart_accel_view, 9, 1)
-
     @Slot(dict)
     def update_values(self, data):
         if not self.pause_btn.isEnabled():
@@ -316,6 +320,109 @@ class TelemetryPage(QWidget):
 
     def set_worker(self, worker):
         self.worker = worker
+
+class GraphsPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        layout = QGridLayout(self)
+        layout.setSpacing(12)
+
+        # --- График температуры BMP ---
+        self.temp_index = 0
+        self.series_temp = QLineSeries()
+        self.series_temp.setColor(QColor("#5cceee"))  # Яркий синий для температуры
+        pen = QPen()
+        pen.setWidthF(2.5)  # setWidthF позволяет задать дробное значение толщины
+        self.series_temp.setPen(pen)
+        chart_temp = QChart()
+        chart_temp.addSeries(self.series_temp)
+        chart_temp.setTitle("Темп BMP, °C")
+        # Стилизация графика
+        chart_temp.setBackgroundVisible(False)
+        chart_temp.setBackgroundBrush(QColor(COLORS["bg_dark"]))
+        chart_temp.setTitleBrush(QColor(COLORS["text_primary"]))
+        chart_temp.setTitleFont(QFont("Segoe UI", 11, QFont.Bold))
+        chart_temp.legend().hide()  # Скрываем легенду
+        ax_x_t = QValueAxis(); ax_x_t.setLabelFormat("%i"); ax_x_t.setTitleText("Точка")
+        ax_y_t = QValueAxis(); ax_y_t.setLabelFormat("%.2f"); ax_y_t.setTitleText("°C")
+        # Стилизация осей
+        for axis in [ax_x_t, ax_y_t]:
+            axis.setLabelsColor(QColor(COLORS["text_secondary"]))
+            axis.setTitleBrush(QColor(COLORS["text_secondary"]))
+            axis.setGridLineColor(QColor("#353535"))  # Тёмные сетки
+            axis.setMinorGridLineColor(QColor("#2a2a2a"))
+            axis.setTitleFont(QFont("Segoe UI", 9))
+            axis.setLabelsFont(QFont("Segoe UI", 8))
+        chart_temp.addAxis(ax_x_t, Qt.AlignBottom); self.series_temp.attachAxis(ax_x_t)
+        chart_temp.addAxis(ax_y_t, Qt.AlignLeft);   self.series_temp.attachAxis(ax_y_t)
+        self.chart_temp_view = QChartView(chart_temp)
+        # Стилизация представления графика
+        self.chart_temp_view.setRenderHint(QPainter.Antialiasing)  # Сглаживание
+        self.chart_temp_view.setBackgroundBrush(QColor(COLORS["bg_dark"]))
+        layout.addWidget(self.chart_temp_view, 0, 0)
+
+        # --- График величины ускорения ---
+        self.acc_index = 0
+        self.series_acc = QLineSeries()
+        # Стилизация линии ускорения
+        self.series_acc.setColor(QColor("#7bed9f"))  # Зелёный для ускорения
+        pen = QPen()
+        pen.setWidthF(2.5)  # setWidthF позволяет задать дробное значение толщины
+        self.series_temp.setPen(pen)
+        chart_acc = QChart()
+        chart_acc.addSeries(self.series_acc)
+        chart_acc.setTitle("Величина ускорения, g")
+        # Стилизация графика
+        chart_acc.setBackgroundVisible(False)
+        chart_acc.setBackgroundBrush(QColor(COLORS["bg_dark"]))
+        chart_acc.setTitleBrush(QColor(COLORS["text_primary"]))
+        chart_acc.setTitleFont(QFont("Segoe UI", 11, QFont.Bold))
+        chart_acc.legend().hide()  # Скрываем легенду
+        ax_x_a = QValueAxis(); ax_x_a.setLabelFormat("%i"); ax_x_a.setTitleText("Точка")
+        ax_y_a = QValueAxis(); ax_y_a.setLabelFormat("%.2f"); ax_y_a.setTitleText("g")
+        # Стилизация осей
+        for axis in [ax_x_a, ax_y_a]:
+            axis.setLabelsColor(QColor(COLORS["text_secondary"]))
+            axis.setTitleBrush(QColor(COLORS["text_secondary"]))
+            axis.setGridLineColor(QColor("#353535"))  # Тёмные сетки
+            axis.setMinorGridLineColor(QColor("#2a2a2a"))
+            axis.setTitleFont(QFont("Segoe UI", 9))
+            axis.setLabelsFont(QFont("Segoe UI", 8))
+        chart_acc.addAxis(ax_x_a, Qt.AlignBottom); self.series_acc.attachAxis(ax_x_a)
+        chart_acc.addAxis(ax_y_a, Qt.AlignLeft);   self.series_acc.attachAxis(ax_y_a)
+        self.chart_accel_view = QChartView(chart_acc)
+        # Стилизация представления графика
+        self.chart_accel_view.setRenderHint(QPainter.Antialiasing)  # Сглаживание
+        self.chart_accel_view.setBackgroundBrush(QColor(COLORS["bg_dark"]))
+        layout.addWidget(self.chart_accel_view, 0, 1)
+
+        ax_x_t.setRange(0, 100)
+        ax_y_t.setRange(0, 40)  # Диапазон для температуры
+        ax_x_a.setRange(0, 100)
+        ax_y_a.setRange(0, 3)   # Диапазон для ускорения
+
+        # В классе GraphsPage исправить метод update_charts
+    @Slot(dict)
+    def update_charts(self, data):
+        # Температура
+        t = data.get("temp_bmp", 0.0)
+        self.series_temp.append(self.temp_index, t)
+        self.temp_index += 1
+        if self.temp_index > 100:
+            ax_x_t = self.chart_temp_view.chart().axisX()
+            ax_x_t.setRange(self.temp_index - 100, self.temp_index)
+        # Ускорение
+        a = data.get("accel", [0,0,0])
+        mag = math.sqrt(a[0]**2 + a[1]**2 + a[2]**2)
+        self.series_acc.append(self.acc_index, mag)
+        self.acc_index += 1
+        if self.acc_index > 100:
+            ax_x_a = self.chart_accel_view.chart().axisX()
+            ax_x_a.setRange(self.acc_index - 100, self.acc_index)
+
+        # Обновить отображение графиков
+        self.chart_temp_view.chart().update()
+        self.chart_accel_view.chart().update()
 
 # === СТРАНИЦА ДАТЧИКОВ ===
 class SensorsPage(QWidget):
@@ -493,6 +600,7 @@ class CameraPage(QWidget):
 # === СТРАНИЦА НАСТРОЕК + .ini ===
 class SettingsPage(QWidget):
     settings_changed = Signal(bool, str, int)
+    simulator_changed  = Signal(bool, str)
     def __init__(self):
         super().__init__()
         self.cfg = configparser.ConfigParser()
@@ -526,7 +634,47 @@ class SettingsPage(QWidget):
             QPushButton:pressed {{ background:{COLORS['btn_active']}; }}
         """)
         self.save_btn.clicked.connect(self.save_settings)
-        layout.addWidget(header); layout.addWidget(udp_card); layout.addWidget(self.save_btn)
+        layout.addWidget(header)
+        layout.addWidget(udp_card)
+
+        # --- Блок имитации из файла ---
+        sim_card = QFrame()
+        sim_card.setStyleSheet(f"QFrame {{ background:{COLORS['bg_card']}; border-radius:8px; padding:15px }}")
+        v2 = QVBoxLayout(sim_card)
+        lab2 = QLabel("<b>Имитация из файла</b>")
+        self.sim_enable = QCheckBox("Включить имитацию")
+        self.sim_file_path = QLineEdit()
+        self.sim_file_path.setPlaceholderText("Путь к бинарному лог-файлу")
+        self.sim_file_path.setReadOnly(True)
+        btn_browse = QPushButton("Выбрать файл")
+        btn_browse.clicked.connect(self.browse_sim_file)
+        # Разметка
+        v2.addWidget(lab2)
+        v2.addWidget(self.sim_enable)
+        hl = QHBoxLayout()
+        hl.addWidget(self.sim_file_path)
+        hl.addWidget(btn_browse)
+        v2.addLayout(hl)
+        layout.addWidget(sim_card)
+        # Блок имитации недоступен, если включён UDP
+        self.udp_enable.stateChanged.connect(
+            lambda s: (
+                self.sim_enable.setEnabled(not s),
+                self.sim_file_path.setEnabled(not s),
+                btn_browse.setEnabled(not s)
+            )
+        )
+        # установить начальное состояние
+        self.sim_enable.setEnabled(not udp)
+        self.sim_file_path.setEnabled(not udp)
+        btn_browse.setEnabled(not udp)
+
+
+
+        #🔼 Конец вставки имитатора
+
+        # кнопка «Сохранить» и отступ внизу
+        layout.addWidget(self.save_btn)
         layout.addStretch()
 
     def save_settings(self):
@@ -541,6 +689,21 @@ class SettingsPage(QWidget):
         host = self.udp_ip.text()
         port = int(self.udp_port.text() or 0)
         self.settings_changed.emit(enabled, host, port)
+        # эмитируем настройки симулятора
+        sim_enabled = self.sim_enable.isChecked()
+        sim_path    = self.sim_file_path.text()
+        self.simulator_changed.emit(sim_enabled, sim_path)
+
+    def browse_sim_file(self):
+        """Открыть диалог выбора бинарного файла для симуляции."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выбрать бинарный файл",
+            "",
+            "Binary files (*.bin);;All files (*)"
+        )
+        if path:
+            self.sim_file_path.setText(path)
 
 # === ГЛАВНОЕ ОКНО ===
 class MainWindow(QMainWindow):
@@ -553,6 +716,7 @@ class MainWindow(QMainWindow):
         self.menu = QListWidget()
         for name, icon in [
             ("Телеметрия", "📊"),
+            ("Графики", "📈"),
             ("Датчики", "🔌"),
             ("Лог", "📝"),
             ("Камера", "🎥"),
@@ -570,12 +734,13 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.tel = TelemetryPage()
+        self.graphs = GraphsPage()
         self.sens = SensorsPage()
         self.log_page = LogPage()
         self.camera = CameraPage()
         self.settings = SettingsPage()
 
-        for w in (self.tel, self.sens, self.log_page, self.camera, self.settings):
+        for w in (self.tel, self.graphs, self.sens, self.log_page, self.camera, self.settings):
             self.stack.addWidget(w)
 
         container = QWidget()
@@ -594,20 +759,39 @@ class MainWindow(QMainWindow):
             QScrollBar::handle:horizontal {{ background:{COLORS['btn_normal']}; min-width:20px; border-radius:5px }}
             QScrollBar::handle:horizontal:hover {{ background:{COLORS['btn_hover']}; }}
         """)
+        self.tabs = QTabWidget()
+
+        #self.tabs.addTab(self.settings, "Настройки")
+        #self.tabs.addTab(self.graphs, "Графики")
+        #self.setCentralWidget(self.tabs)
 
         # Запускаем worker
         self.worker = TelemetryWorker("COM3", 9600)
         self.tel.set_worker(self.worker)
         self.worker.data_ready.connect(self.tel.update_values)
-        self.worker.data_ready.connect(self.tel.update_chart)
+        self.worker.data_ready.connect(self.graphs.update_charts)
         self.worker.data_ready.connect(self.sens.update_data)
         self.worker.log_ready.connect(self.log_page.add_log_message)
         self.worker.error_crc.connect(QApplication.beep)
         # UDP settings
         self.settings.settings_changed.connect(self.worker.update_udp)
+        # Simulation settings
+        self.settings.simulator_changed.connect(self.on_simulator_changed)
         # передать начальные из .ini
         self.worker.start()
         self.settings.save_settings()
+
+    def on_simulator_changed(self, enabled: bool, filepath: str):
+        """Обработчик включения симуляции из файла."""
+        self.worker.sim_enabled = enabled
+        if enabled:
+            try:
+                # открываем файл только при включении симуляции
+                self.worker.sim_f = open(filepath, "rb")
+            except Exception as e:
+                print(f"[Ошибка открытия файла симуляции]: {e}")
+                # отключаем симуляцию при неудаче
+                self.worker.sim_enabled = False
 
     def on_change(self, idx):
         self.stack.setCurrentIndex(idx)
