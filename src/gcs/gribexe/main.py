@@ -1,14 +1,23 @@
 import sys, struct, math, datetime, os, socket, configparser, zipfile, time
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QListWidget, QStackedWidget, QFrame,
+    QPushButton, QLabel, QStackedWidget, QFrame,
     QGridLayout, QSplitter, QSizePolicy, QTextEdit, QLineEdit,
-    QCheckBox, QFileDialog, QTabWidget
+    QCheckBox, QFileDialog, QScrollArea
 )
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QUrl
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QUrl, QPointF, QTimer
 from PySide6.QtGui import QPalette, QColor, QPixmap, QFont, QPainter, QPen
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
+
+import pyqtgraph as pg
+import pyqtgraph.opengl as gl
+from pyqtgraph.opengl import MeshData, GLMeshItem
+
+from OpenGL.GL import (
+    GL_POLYGON_OFFSET_FILL,
+    glEnable, glPolygonOffset, glDisable
+)
 
 # === ПАРАМЕТРЫ ПАРСЕРА ===
 PL, R0 = 1000, 4000
@@ -18,21 +27,24 @@ STRUCT_FMT = "<2HIhI6hBHBH4h3fB3HB"  # 60 bytes
 
 # === ЦВЕТОВАЯ СХЕМА ===
 COLORS = {
-    "bg_main": "#1e1e1e",
-    "bg_dark": "#1f2329",
-    "bg_card": "#2e3238",
-    "bg_panel": "#2e2e2e",
-    "accent": "#3a7ebf",
-    "btn_normal": "#3c3f41",
-    "btn_hover": "#4a5055",
-    "btn_active": "#5a6066",
-    "text_primary": "#ffffff",
-    "text_secondary": "#aaaaaa",
-    "text_highlight": "#61afef",
-    "success": "#98c379",
-    "warning": "#e5c07b",
-    "danger": "#e06c75",
-    "info": "#56b6c2"
+    "bg_main": "#1a1a1a",         # Main background (darker)
+    "bg_dark": "#121212",         # Sidebar/darker areas
+    "bg_card": "#252525",         # Card backgrounds
+    "bg_panel": "#202020",        # Panel backgrounds
+    "accent": "#4fc3f7",          # Main accent color (light blue like in image)
+    "accent_darker": "#2196f3",   # Darker accent for hover
+    "btn_normal": "#333333",      # Button normal state
+    "btn_hover": "#444444",       # Button hover state
+    "btn_active": "#555555",      # Button active state
+    "text_primary": "#ffffff",    # Main text
+    "text_secondary": "#aaaaaa",  # Secondary text
+    "text_highlight": "#4fc3f7",  # Highlighted text (same as accent)
+    "success": "#81c784",         # Success color
+    "warning": "#ffb74d",         # Warning color
+    "danger": "#e57373",          # Danger/error color
+    "info": "#64b5f6",            # Info color
+    "chart_grid": "#3a3a3a",      # Chart grid lines
+    "chart_bg": "#1e1e1e"         # Chart background (slightly lighter than dark bg)
 }
 
 # === WORKER ДЛЯ UART + UDP + ЛОГОВ + CRC-ОШИБОК ===
@@ -117,7 +129,8 @@ class TelemetryWorker(QThread):
 
     def run(self):
         buf = b""
-        self.log_ready.emit("Telemetry thread started")
+        self.log_ready.emit("Telemetry thread started. Version 1.5.0")
+        self.log_ready.emit("Надёжная версия: 1.2.2")
 
         while self._running:
             try:
@@ -321,108 +334,517 @@ class TelemetryPage(QWidget):
     def set_worker(self, worker):
         self.worker = worker
 
+        # + Replace the GraphsPage class with this enhanced version
 class GraphsPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QGridLayout(self)
+        # Оборачиваем сетку в прокручиваемую область
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QGridLayout(content)
+        self.setLayout(QVBoxLayout())
+        self.layout().addWidget(scroll)
+        scroll.setWidget(content)
         layout.setSpacing(12)
 
-        # --- График температуры BMP ---
-        self.temp_index = 0
-        self.series_temp = QLineSeries()
-        self.series_temp.setColor(QColor("#5cceee"))  # Яркий синий для температуры
-        pen = QPen()
-        pen.setWidthF(2.5)  # setWidthF позволяет задать дробное значение толщины
-        self.series_temp.setPen(pen)
-        chart_temp = QChart()
-        chart_temp.addSeries(self.series_temp)
-        chart_temp.setTitle("Темп BMP, °C")
-        # Стилизация графика
-        chart_temp.setBackgroundVisible(False)
-        chart_temp.setBackgroundBrush(QColor(COLORS["bg_dark"]))
-        chart_temp.setTitleBrush(QColor(COLORS["text_primary"]))
-        chart_temp.setTitleFont(QFont("Segoe UI", 11, QFont.Bold))
-        chart_temp.legend().hide()  # Скрываем легенду
-        ax_x_t = QValueAxis(); ax_x_t.setLabelFormat("%i"); ax_x_t.setTitleText("Точка")
-        ax_y_t = QValueAxis(); ax_y_t.setLabelFormat("%.2f"); ax_y_t.setTitleText("°C")
-        # Стилизация осей
-        for axis in [ax_x_t, ax_y_t]:
+        # Dictionary to store all chart views and series
+        self.charts = {}
+        self.indexes = {}
+        self.data_points = {}  # Store maximum points to display
+        self.data_history = {}  # + Хранить историю значений для лучшего масштабирования
+
+        # Define all the charts we want to display
+        chart_configs = [
+            {"name": "temp_bmp", "title": "Температура BMP, °C", "color": "#5cceee", "y_range": [0, 40]},
+            {"name": "press_bmp", "title": "Давление, Па", "color": "#ff9e80", "y_range": [80000, 110000]},
+            {"name": "accel", "title": "Ускорение, g", "color": "#7bed9f", "y_range": [0, 3], "multi_axis": True,
+             "axis_names": ["X", "Y", "Z"]},
+            {"name": "gyro", "title": "Угловая скорость, °/с", "color": "#ffeb3b", "y_range": [-180, 180], "multi_axis": True,
+             "axis_names": ["X", "Y", "Z"]},
+            {"name": "mag", "title": "Магнитное поле", "color": "#ba68c8", "y_range": [-1, 1], "multi_axis": True,
+             "axis_names": ["X", "Y", "Z"]},
+            {"name": "temp_ds", "title": "Температура DS18B20, °C", "color": "#4db6ac", "y_range": [0, 40]},
+            {"name": "photo", "title": "Фоторезистор, В", "color": "#fff176", "y_range": [0, 5]},
+            {"name": "scd41", "title": "SCD41 (CO₂), ppm", "color": "#aed581", "y_range": [0, 2000]},
+            {"name": "mq4", "title": "MQ-4 (CH₄), ppm", "color": "#f48fb1", "y_range": [0, 1000]},
+            {"name": "me2o2", "title": "ME2-O2, ppm", "color": "#90caf9", "y_range": [0, 25]}
+        ]
+
+        # Create charts
+        row, col = 0, 0
+        columns = 2  # Теперь две колонки вместо трех
+        for config in chart_configs:
+            chart_view = self.create_chart(config)
+            # Компактный минимум и растягиваемость
+            chart_view.setMinimumSize(600, 350)
+            chart_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            layout.addWidget(chart_view, row, col)
+            # Store the max number of points to show
+            self.data_points[config["name"]] = 200  # Show more points for better visualization
+            # + Инициализировать историю данных
+            self.data_history[config["name"]] = []
+
+            # Next position
+            col += 1
+            if col >= columns:  # 2 columns of charts
+                col = 0
+                row += 1
+
+    def create_chart(self, config):
+        """Create a chart based on configuration"""
+        name = config["name"]
+        title = config["title"]
+        color = config["color"]
+        y_range = config["y_range"]
+        multi_axis = config.get("multi_axis", False)
+        axis_names = config.get("axis_names", ["X", "Y", "Z"])
+
+        # Initialize index and series
+        self.indexes[name] = 0
+
+        # Create chart and setup
+        chart = QChart()
+        chart.setTitle(title)
+        # - Удаляем анимацию для устранения подергиваний
+        # chart.setAnimationOptions(QChart.SeriesAnimations)
+
+        # Styling
+        chart.setBackgroundVisible(False)
+        chart.setBackgroundBrush(QColor(COLORS["bg_dark"]))
+        chart.setTitleBrush(QColor(COLORS["text_primary"]))
+        chart.setTitleFont(QFont("Segoe UI", 12, QFont.Bold))
+        chart.legend().setVisible(multi_axis)  # Show legend only for multi-axis charts
+        chart.legend().setAlignment(Qt.AlignBottom)
+        chart.legend().setFont(QFont("Segoe UI", 9))
+        chart.legend().setLabelColor(QColor(COLORS["text_primary"]))
+
+        # Axes
+        ax_x = QValueAxis()
+        ax_x.setLabelFormat("%i")
+        ax_x.setTitleText("Точка")
+        ax_x.setRange(0, 200)  # Show more points by default
+        ax_x.setGridLineVisible(True)
+        ax_x.setMinorTickCount(4)
+
+        ax_y = QValueAxis()
+        ax_y.setLabelFormat("%.2f")
+        ax_y.setRange(y_range[0], y_range[1])
+        ax_y.setGridLineVisible(True)
+        ax_y.setMinorTickCount(4)
+
+        # Styling axes
+        for axis in [ax_x, ax_y]:
             axis.setLabelsColor(QColor(COLORS["text_secondary"]))
             axis.setTitleBrush(QColor(COLORS["text_secondary"]))
-            axis.setGridLineColor(QColor("#353535"))  # Тёмные сетки
+            axis.setGridLineColor(QColor(COLORS["chart_grid"]))
             axis.setMinorGridLineColor(QColor("#2a2a2a"))
             axis.setTitleFont(QFont("Segoe UI", 9))
             axis.setLabelsFont(QFont("Segoe UI", 8))
-        chart_temp.addAxis(ax_x_t, Qt.AlignBottom); self.series_temp.attachAxis(ax_x_t)
-        chart_temp.addAxis(ax_y_t, Qt.AlignLeft);   self.series_temp.attachAxis(ax_y_t)
-        self.chart_temp_view = QChartView(chart_temp)
-        # Стилизация представления графика
-        self.chart_temp_view.setRenderHint(QPainter.Antialiasing)  # Сглаживание
-        self.chart_temp_view.setBackgroundBrush(QColor(COLORS["bg_dark"]))
-        layout.addWidget(self.chart_temp_view, 0, 0)
 
-        # --- График величины ускорения ---
-        self.acc_index = 0
-        self.series_acc = QLineSeries()
-        # Стилизация линии ускорения
-        self.series_acc.setColor(QColor("#7bed9f"))  # Зелёный для ускорения
-        pen = QPen()
-        pen.setWidthF(2.5)  # setWidthF позволяет задать дробное значение толщины
-        self.series_temp.setPen(pen)
-        chart_acc = QChart()
-        chart_acc.addSeries(self.series_acc)
-        chart_acc.setTitle("Величина ускорения, g")
-        # Стилизация графика
-        chart_acc.setBackgroundVisible(False)
-        chart_acc.setBackgroundBrush(QColor(COLORS["bg_dark"]))
-        chart_acc.setTitleBrush(QColor(COLORS["text_primary"]))
-        chart_acc.setTitleFont(QFont("Segoe UI", 11, QFont.Bold))
-        chart_acc.legend().hide()  # Скрываем легенду
-        ax_x_a = QValueAxis(); ax_x_a.setLabelFormat("%i"); ax_x_a.setTitleText("Точка")
-        ax_y_a = QValueAxis(); ax_y_a.setLabelFormat("%.2f"); ax_y_a.setTitleText("g")
-        # Стилизация осей
-        for axis in [ax_x_a, ax_y_a]:
-            axis.setLabelsColor(QColor(COLORS["text_secondary"]))
-            axis.setTitleBrush(QColor(COLORS["text_secondary"]))
-            axis.setGridLineColor(QColor("#353535"))  # Тёмные сетки
-            axis.setMinorGridLineColor(QColor("#2a2a2a"))
-            axis.setTitleFont(QFont("Segoe UI", 9))
-            axis.setLabelsFont(QFont("Segoe UI", 8))
-        chart_acc.addAxis(ax_x_a, Qt.AlignBottom); self.series_acc.attachAxis(ax_x_a)
-        chart_acc.addAxis(ax_y_a, Qt.AlignLeft);   self.series_acc.attachAxis(ax_y_a)
-        self.chart_accel_view = QChartView(chart_acc)
-        # Стилизация представления графика
-        self.chart_accel_view.setRenderHint(QPainter.Antialiasing)  # Сглаживание
-        self.chart_accel_view.setBackgroundBrush(QColor(COLORS["bg_dark"]))
-        layout.addWidget(self.chart_accel_view, 0, 1)
+        # Create series
+        if multi_axis:
+            # For multi-axis data (like accelerometer with x,y,z)
+            colors = ["#4fc3f7", "#ff9e80", "#aed581"]  # Blue, Orange, Green for X, Y, Z
+            series_list = []
 
-        ax_x_t.setRange(0, 100)
-        ax_y_t.setRange(0, 40)  # Диапазон для температуры
-        ax_x_a.setRange(0, 100)
-        ax_y_a.setRange(0, 3)   # Диапазон для ускорения
+            for i in range(3):
+                series = QLineSeries()
+                series.setName(axis_names[i])
+                pen = QPen()
+                pen.setColor(QColor(colors[i]))
+                pen.setWidthF(2.5)
+                series.setPen(pen)
+                chart.addSeries(series)
 
-        # В классе GraphsPage исправить метод update_charts
+                # We must create separate Y axis for each series to avoid scaling issues
+                if i == 0:
+                    # Use the main Y axis for the first series
+                    chart.addAxis(ax_y, Qt.AlignLeft)
+                    series.attachAxis(ax_y)
+                else:
+                    # Create additional Y axes that will share the same scale
+                    extra_y = QValueAxis()
+                    extra_y.setRange(y_range[0], y_range[1])
+                    extra_y.setVisible(False)  # Hide additional Y axes, only use for scaling
+                    chart.addAxis(extra_y, Qt.AlignLeft)
+                    series.attachAxis(extra_y)
+
+                # All series share the X axis
+                if i == 0:
+                    chart.addAxis(ax_x, Qt.AlignBottom)
+                series.attachAxis(ax_x)
+
+                series_list.append(series)
+
+            self.charts[name] = {
+                "view": None,  # Will be set below
+                "chart": chart,
+                "series": series_list,
+                "x_axis": ax_x,
+                "y_axis": ax_y,
+                "multi_axis": True,
+                "y_range": y_range  # + Сохраняем исходный диапазон
+            }
+        else:
+            # For single value data
+            series = QLineSeries()
+            pen = QPen()
+            pen.setColor(QColor(color))
+            pen.setWidthF(2.5)
+            series.setPen(pen)
+
+            chart.addSeries(series)
+            chart.addAxis(ax_x, Qt.AlignBottom)
+            chart.addAxis(ax_y, Qt.AlignLeft)
+            series.attachAxis(ax_x)
+            series.attachAxis(ax_y)
+
+            self.charts[name] = {
+                "view": None,  # Will be set below
+                "chart": chart,
+                "series": series,
+                "x_axis": ax_x,
+                "y_axis": ax_y,
+                "multi_axis": False,
+                "y_range": y_range  # + Сохраняем исходный диапазон
+            }
+
+        # Create chart view with enhanced rendering
+        chart_view = QChartView(chart)
+        chart_view.setRenderHint(QPainter.Antialiasing)
+        chart_view.setRenderHint(QPainter.TextAntialiasing)
+        chart_view.setRenderHint(QPainter.SmoothPixmapTransform)
+        chart_view.setBackgroundBrush(QColor(COLORS["bg_dark"]))
+        chart_view.setMinimumHeight(250)  # Set minimum height for better visibility
+
+        # Store the view reference
+        self.charts[name]["view"] = chart_view
+
+        return chart_view
+
+    def auto_scale_y_axis(self, name, data_values):
+        """Automatically scale the Y axis based on current data values with improved logic"""
+        chart_data = self.charts.get(name)
+        if not chart_data:
+            return
+
+        y_axis = chart_data["y_axis"]
+        # + Получаем историю значений
+        history = self.data_history.get(name, [])
+
+        # + Если новых значений нет или они пустые - не меняем масштаб
+        if not data_values:
+            return
+
+        # + Работаем с историей + текущими значениями для стабильного масштабирования
+        all_values = history + data_values
+
+        # + Если данных все еще мало - используем исходный диапазон
+        # Всегда вычисляем мин/макс из всех собранных значений
+        valid_values = [v for v in all_values if v is not None and not math.isnan(v)]
+        if not valid_values:
+            return
+        current_min = min(valid_values)
+        current_max = max(valid_values)
+
+        # + Не допускаем, чтобы мин и макс были слишком близко друг к другу
+        if abs(current_max - current_min) < 0.1:
+            current_min -= 0.5
+            current_max += 0.5
+
+        # + Добавляем отступ для лучшей визуализации (20%)
+        padding = (current_max - current_min) * 0.2
+        new_min = current_min - padding
+        new_max = current_max + padding
+
+        current_axis_min = y_axis.min()
+        current_axis_max = y_axis.max()
+        if new_min < current_axis_min or new_max > current_axis_max:
+            y_axis.setRange(new_min, new_max)
+            # обновляем доп. оси в мульти-графиках
+            if chart_data.get("multi_axis"):
+                chart = chart_data["chart"]
+                for i, series in enumerate(chart_data["series"]):
+                    if i > 0:
+                        for axis in chart.axes(Qt.Vertical, series):
+                            axis.setRange(new_min, new_max)
+            return
+
+        smooth_factor = 0.2  # Коэффициент сглаживания...
+        final_min = current_axis_min + (new_min - current_axis_min) * smooth_factor
+        final_max = current_axis_max + (new_max - current_axis_max) * smooth_factor
+        # + Плавное изменение масштаба вместо резкого
+        current_axis_min = y_axis.min()
+        current_axis_max = y_axis.max()
+
+        # + Применяем сглаживание для избежания "прыгающего" масштаба
+        smooth_factor = 0.2  # Коэффициент сглаживания (меньше - плавнее, но медленнее)
+        final_min = current_axis_min + (new_min - current_axis_min) * smooth_factor
+        final_max = current_axis_max + (new_max - current_axis_max) * smooth_factor
+
+        # + Меняем масштаб только если разница существенная
+        threshold = (current_axis_max - current_axis_min) * 0.1  # 10% порог изменения
+        if (abs(final_min - current_axis_min) > threshold or
+            abs(final_max - current_axis_max) > threshold):
+            y_axis.setRange(final_min, final_max)
+
+            # + Также обновляем дополнительные оси в мульти-графиках
+            if chart_data.get("multi_axis"):
+                chart = chart_data["chart"]
+                for i, series in enumerate(chart_data["series"]):
+                    if i > 0:  # Пропускаем первую серию, т.к. она использует основную ось
+                        axes = chart.axes(Qt.Vertical, series)
+                        if axes:
+                            for axis in axes:
+                                axis.setRange(final_min, final_max)
+
     @Slot(dict)
     def update_charts(self, data):
-        # Температура
-        t = data.get("temp_bmp", 0.0)
-        self.series_temp.append(self.temp_index, t)
-        self.temp_index += 1
-        if self.temp_index > 100:
-            ax_x_t = self.chart_temp_view.chart().axisX()
-            ax_x_t.setRange(self.temp_index - 100, self.temp_index)
-        # Ускорение
-        a = data.get("accel", [0,0,0])
-        mag = math.sqrt(a[0]**2 + a[1]**2 + a[2]**2)
-        self.series_acc.append(self.acc_index, mag)
-        self.acc_index += 1
-        if self.acc_index > 100:
-            ax_x_a = self.chart_accel_view.chart().axisX()
-            ax_x_a.setRange(self.acc_index - 100, self.acc_index)
+        """Update all charts with new data"""
+        for name, chart_data in self.charts.items():
+            if name not in data:
+                continue
 
-        # Обновить отображение графиков
-        self.chart_temp_view.chart().update()
-        self.chart_accel_view.chart().update()
+            value = data.get(name)
+            index = self.indexes.get(name, 0)
+            x_axis = chart_data["x_axis"]
+            max_points = self.data_points.get(name, 200)
+
+            # + Блокируем обновления для предотвращения мерцания
+            chart_view = chart_data["view"]
+            chart_view.setUpdatesEnabled(False)
+
+            # Check if this is a multi-axis chart
+            if chart_data.get("multi_axis", False):
+                # Multi-axis data (accel, gyro, mag)
+                series_list = chart_data["series"]
+
+                if isinstance(value, list) and len(value) >= 3:
+                    data_values = []
+
+                    for i in range(3):
+                        series = series_list[i]
+                        if series.count() >= max_points:
+                            # + Удаляем старые точки разом вместо поштучного удаления
+                            points_to_keep = []
+                            for j in range(1, series.count()):
+                                point = series.at(j)
+                                # Сдвигаем X-координаты
+                                points_to_keep.append(QPointF(j-1, point.y()))
+
+                            series.clear()
+                            series.append(points_to_keep)
+
+                        # Add new point
+                        series.append(series.count(), value[i])
+                        data_values.append(value[i])
+
+                    # + Обновляем историю данных для автомасштабирования
+                    history = self.data_history.get(name, [])
+                    history.extend(data_values)
+                    # Ограничиваем количество сохраненных точек
+                    max_history = max_points * 3  # Храним максимум в 3 раза больше точек чем отображаем
+                    if len(history) > max_history:
+                        history = history[-max_history:]
+                    self.data_history[name] = history
+
+                    # Auto-scale Y axis based on all three values
+                    self.auto_scale_y_axis(name, data_values)
+
+            else:
+                # Single-value data
+                series = chart_data["series"]
+
+                if isinstance(value, (int, float)):
+                    if series.count() >= max_points:
+                        # + Оптимизация: вместо поштучного обновления точек
+                        points_to_keep = []
+                        for j in range(1, series.count()):
+                            point = series.at(j)
+                            # Сдвигаем X-координаты
+                            points_to_keep.append(QPointF(j-1, point.y()))
+
+                        series.clear()
+                        series.append(points_to_keep)
+
+                    # Add new point
+                    series.append(series.count(), value)
+
+                    # + Обновляем историю данных
+                    history = self.data_history.get(name, [])
+                    history.append(value)
+                    # Ограничиваем количество сохраненных точек
+                    if len(history) > max_points * 3:
+                        history = history[-max_points*3:]
+                    self.data_history[name] = history
+
+                    # Auto-scale Y axis based on current value
+                    self.auto_scale_y_axis(name, [value])
+
+            # Update index
+            self.indexes[name] = index + 1
+
+            # Update X axis to always show the latest points
+            visible_points = min(max_points, series.count() if not chart_data.get("multi_axis") else series_list[0].count())
+            if visible_points > 0:
+                # + Устанавливаем диапазон X с небольшим отступом справа
+                x_axis.setRange(0, visible_points + 5)  # +5 для небольшого отступа справа
+
+            # + Разрешаем обновления после всех изменений
+            chart_view.setUpdatesEnabled(True)
+
+            # + Обновляем только по необходимости
+            chart_data["view"].update()
+import numpy as np
+def load_mesh_obj(filename: str) -> MeshData:
+    """
+    Загружает Wavefront OBJ файл (вершины и грани) и возвращает MeshData.
+    Поддерживается триангуляция полигонов.
+    """
+    verts = []
+    faces = []
+
+    with open(filename, 'r') as f:
+        for line in f:
+            if line.startswith('v '):
+                parts = line.strip().split()[1:]
+                verts.append(tuple(map(float, parts)))
+            elif line.startswith('f '):
+                parts = line.strip().split()[1:]
+                idx = []
+                for p in parts:
+                    v = p.split('/')[0]
+                    idx.append(int(v) - 1)
+                # Триангуляция (fan triangulation)
+                if len(idx) == 3:
+                    faces.append(idx)
+                else:
+                    for i in range(1, len(idx) - 1):
+                        faces.append([idx[0], idx[i], idx[i + 1]])
+
+    # ❗ Обязательно преобразуем в numpy массивы
+    vert_array = np.array(verts, dtype=np.float32)
+    face_array = np.array(faces, dtype=np.int32)
+
+    return MeshData(vertexes=vert_array, faces=face_array)
+
+
+
+# Отключаем мыш. управление
+class NoMouseView(gl.GLViewWidget):
+    def mousePressEvent(self, ev): pass
+    def mouseMoveEvent(self, ev):  pass
+    def wheelEvent(self, ev):      pass
+
+
+class TestPage(QWidget):
+    """Вкладка Test: 3D-модель из OBJ, плавно поворачивается на 120 FPS, без мерцания граней и ребер."""
+    def __init__(self, obj_file: str):
+        super().__init__()
+        layout = QVBoxLayout(self)
+
+        # Виджет 3D и метка FPS
+        self.view = NoMouseView()
+        self.fps_label = QLabel("FPS: 0")
+        self.fps_label.setStyleSheet(
+            "color:white; font-size:10px; background-color:rgba(0,0,0,100);"
+            "padding:2px 4px; border-radius:3px;"
+        )
+        self.fps_label.setFixedSize(50,16)
+        layout.addWidget(self.fps_label)
+        self.view.setCameraPosition(distance=10)
+        self.view.setBackgroundColor(QColor(30,30,30))
+        layout.addWidget(self.view)
+
+        # Загружаем OBJ-модель
+        meshdata = load_mesh_obj(obj_file)
+
+        # 1) Грани модели: ровный белый цвет, без ребер
+        self.face_mesh = GLMeshItem(
+            meshdata=meshdata,
+            smooth=True,
+            drawFaces=True,
+            drawEdges=False,
+            faceColor=(0.2, 0.4, 0.8, 1.0),
+            shader='shaded'
+        )
+        self.view.addItem(self.face_mesh)
+        self.face_mesh.setGLOptions('opaque')
+
+        # 2) Рёбра: рисуем поверх граней
+        self.edge_mesh = GLMeshItem(
+            meshdata=meshdata,
+            smooth=False,
+            drawFaces=False,
+            drawEdges=True,
+            edgeColor=(1.0,1.0,1.0,1.0)
+        )
+        self.edge_mesh.setGLOptions('additive')
+        self.view.addItem(self.edge_mesh)
+
+        self._adjust_camera(meshdata)
+
+        # Поворот и FPS
+        self.roll = self.pitch = self.yaw = 0.0
+        self.frame_count = 0
+        self.last_fps_time = time.time()
+
+        # Запускаем таймер на ~120 FPS
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._on_frame)
+        self.timer.start(8)
+
+    @Slot(dict)
+    def update_orientation(self, data):
+        gx, gy, gz = data.get('gyro', [0,0,0])
+        dt = 0.05
+        self.roll  += gx * dt
+        self.pitch += gy * dt
+        self.yaw   += gz * dt
+
+    # +++ Добавляем новый метод для подстройки камеры +++
+    def _adjust_camera(self, meshdata):
+        # Получаем все вершины модели
+        vertices = meshdata.vertexes()
+
+        # Находим минимальные и максимальные координаты модели по всем осям
+        min_coords = vertices.min(axis=0)
+        max_coords = vertices.max(axis=0)
+
+        # Центр модели
+        center = (min_coords + max_coords) / 2
+
+        # Размер модели — дистанция между минимальной и максимальной точками
+        size = np.linalg.norm(max_coords - min_coords)
+
+        # Настройка центра и размера
+        self.view.opts['center'] = pg.Vector(center[0], center[1], center[2])
+
+        # Устанавливаем камеру на достаточное расстояние от модели, чтобы она полностью влезла в кадр
+        self.view.opts['distance'] = size * 2.5  # Можно уменьшить или увеличить множитель для корректировки видимости
+    # --- Конец вставки новых строк ---
+
+    def _on_frame(self):
+        # Применяем трансформации ко всем мешам
+        for mesh in (self.face_mesh, self.edge_mesh):
+            mesh.resetTransform()
+            mesh.rotate(self.roll, 1,0,0)
+            mesh.rotate(self.pitch,0,1,0)
+            mesh.rotate(self.yaw,  0,0,1)
+
+        # Считаем FPS
+        self.frame_count += 1
+        now = time.time()
+        if now - self.last_fps_time >= 1.0:
+            fps = self.frame_count / (now - self.last_fps_time)
+            self.fps_label.setText(f"FPS: {fps:.1f}")
+            self.frame_count = 0
+            self.last_fps_time = now
+
+        # Обновляем вид
+        self.view.update()
 
 # === СТРАНИЦА ДАТЧИКОВ ===
 class SensorsPage(QWidget):
@@ -707,59 +1129,113 @@ class SettingsPage(QWidget):
 
 # === ГЛАВНОЕ ОКНО ===
 class MainWindow(QMainWindow):
+    # In MainWindow class, modify the init method to include a more modern sidebar:
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Наземка – Интерфейс Телеметрии")
-        self.resize(1000, 600)
+        self.setWindowTitle("Telemetry Dashboard")
+        self.resize(1200, 700)  # Slightly larger default size
         apply_dark_theme(QApplication.instance())
 
-        self.menu = QListWidget()
-        for name, icon in [
-            ("Телеметрия", "📊"),
-            ("Графики", "📈"),
-            ("Датчики", "🔌"),
-            ("Лог", "📝"),
-            ("Камера", "🎥"),
-            ("Настройки", "⚙️")
-        ]:
-            self.menu.addItem(f"{icon} {name}")
-        self.menu.currentRowChanged.connect(self.on_change)
-        self.menu.setFixedWidth(180)
-        self.menu.setStyleSheet(f"""
-            QListWidget {{ background:{COLORS['bg_dark']}; color:{COLORS['text_primary']}; border:none }}
-            QListWidget::item {{ padding:15px; font-size:12pt; border-bottom:1px solid #2c303a }}
-            QListWidget::item:selected {{ background:{COLORS['accent']}; color:white }}
-            QListWidget::item:hover:!selected {{ background:{COLORS['btn_hover']}; }}
-        """)
+        # Create main layout with sidebar and content
+        main_widget = QWidget()
+        main_layout = QHBoxLayout(main_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
+        # Sidebar
+        sidebar = QWidget()
+        sidebar.setFixedWidth(220)
+        sidebar.setStyleSheet(f"background-color: {COLORS['bg_dark']};")
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(15, 30, 15, 20)
+        sidebar_layout.setSpacing(10)
+
+        # Navigation menu items
+        menu_items = [
+            {"name": "Telemetry", "icon": "📊", "index": 0},
+            {"name": "Graphs", "icon": "📈", "index": 1},
+            {"name": "Sensors", "icon": "🔌", "index": 2},
+            {"name": "Logs", "icon": "📝", "index": 3},
+            {"name": "Camera", "icon": "🎥", "index": 4},
+            {"name": "Settings", "icon": "⚙️", "index": 5},
+            {"name": "Test",      "icon": "🧪", "index": 6}
+        ]
+
+        self.nav_buttons = []
+        for item in menu_items:
+            btn = QPushButton(f" {item['icon']} {item['name']}")
+            btn.setProperty("index", item["index"])
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    text-align: left;
+                    padding: 12px 15px;
+                    border-radius: 8px;
+                    color: {COLORS['text_secondary']};
+                    background: transparent;
+                    font-size: 14px;
+                }}
+                QPushButton:hover {{
+                    background: {COLORS['btn_hover']};
+                    color: {COLORS['text_primary']};
+                }}
+                QPushButton:checked {{
+                    background: {COLORS['accent']};
+                    color: white;
+                    font-weight: bold;
+                }}
+            """)
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda _, idx=item["index"], b=btn: self.on_nav_click(idx, b))
+            self.nav_buttons.append(btn)
+            sidebar_layout.addWidget(btn)
+
+        # Make first button selected by default
+        self.nav_buttons[0].setChecked(True)
+
+        sidebar_layout.addStretch()
+        main_layout.addWidget(sidebar)
+
+        # Content area
+        content_area = QWidget()
+        content_layout = QVBoxLayout(content_area)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+
+        # Menu button for mobile (can be hidden on desktop)
+        menu_btn = QPushButton("≡")
+        menu_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {COLORS['accent']};
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 20px;
+                padding: 5px 15px;
+            }}
+            QPushButton:hover {{
+                background: {COLORS['accent_darker']};
+            }}
+        """)
+        menu_btn.setFixedSize(40, 40)
+
+        # Stack of pages
         self.stack = QStackedWidget()
+        self.stack.setStyleSheet(f"background: {COLORS['bg_main']};")
+
+        # Add pages to stack
         self.tel = TelemetryPage()
         self.graphs = GraphsPage()
         self.sens = SensorsPage()
         self.log_page = LogPage()
         self.camera = CameraPage()
         self.settings = SettingsPage()
-
-        for w in (self.tel, self.graphs, self.sens, self.log_page, self.camera, self.settings):
+        self.test = TestPage("models/grib.obj")
+        for w in (self.tel, self.graphs, self.sens, self.log_page, self.camera, self.settings, self.test):
             self.stack.addWidget(w)
 
-        container = QWidget()
-        hl = QHBoxLayout(container)
-        hl.addWidget(self.menu); hl.addWidget(self.stack)
-        hl.setContentsMargins(0,0,0,0); hl.setSpacing(0)
-        self.setCentralWidget(container)
-        self.menu.setCurrentRow(0)
+        content_layout.addWidget(self.stack)
+        main_layout.addWidget(content_area)
 
-        self.setStyleSheet(f"""
-            QMainWindow {{ background:{COLORS['bg_main']} }}
-            QScrollBar:vertical {{ background:{COLORS['bg_dark']}; width:10px }}
-            QScrollBar::handle:vertical {{ background:{COLORS['btn_normal']}; min-height:20px; border-radius:5px }}
-            QScrollBar::handle:vertical:hover {{ background:{COLORS['btn_hover']}; }}
-            QScrollBar:horizontal {{ background:{COLORS['bg_dark']}; height:10px }}
-            QScrollBar::handle:horizontal {{ background:{COLORS['btn_normal']}; min-width:20px; border-radius:5px }}
-            QScrollBar::handle:horizontal:hover {{ background:{COLORS['btn_hover']}; }}
-        """)
-        self.tabs = QTabWidget()
+        self.setCentralWidget(main_widget)
 
         #self.tabs.addTab(self.settings, "Настройки")
         #self.tabs.addTab(self.graphs, "Графики")
@@ -780,6 +1256,13 @@ class MainWindow(QMainWindow):
         # передать начальные из .ini
         self.worker.start()
         self.settings.save_settings()
+        self.worker.data_ready.connect(self.test.update_orientation)
+
+    def on_nav_click(self, idx, btn):
+        for b in self.nav_buttons:
+            b.setChecked(False)
+        btn.setChecked(True)
+        self.stack.setCurrentIndex(idx)
 
     def on_simulator_changed(self, enabled: bool, filepath: str):
         """Обработчик включения симуляции из файла."""
