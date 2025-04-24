@@ -16,9 +16,14 @@ os.environ['QT_API'] = 'pyside6'
 
 from collections import deque
 
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QPropertyAnimation
 from PySide6.QtGui  import QCursor
 from PySide6.QtWidgets import QToolTip
+
+from PySide6.QtWidgets import QGraphicsDropShadowEffect
+
+from PySide6.QtGui import QShortcut
+from PySide6.QtGui import QKeySequence
 
 # 🖼️ PySide6 — Виджеты и интерфейс
 from PySide6.QtWidgets import (
@@ -30,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from PySide6.QtGui    import QDrag, QMouseEvent, QDropEvent, QDragEnterEvent, QDragMoveEvent
 from PySide6.QtCore   import QByteArray, QMimeData
+from PySide6.QtWidgets import QPlainTextEdit
 
 # 🔄 Qt Core — Сигналы, Слоты, Таймеры, Потоки
 from qtpy.QtCore import (
@@ -42,6 +48,9 @@ from PySide6.QtGui import QVector3D
 from qtpy.QtGui import (
     QPalette, QColor, QFont, QPainter, QPen
 )
+
+from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat
+from PySide6.QtCore import QRegularExpression
 
 # 📈 Qt Charts — Графики
 from qtpy.QtCharts import (
@@ -199,8 +208,8 @@ class TelemetryWorker(QThread):
 
     def run(self):
         buf = b""
-        self.log_ready.emit("Telemetry thread started. Version 1.9.0 ")
-        self.log_ready.emit("Надёжная версия: 1.9.0")
+        self.log_ready.emit("Telemetry thread started. Version 2.0 (Big Update)")
+        self.log_ready.emit("Надёжная версия: 1.9")
 
         while self._running:
             try:
@@ -267,6 +276,9 @@ class TelemetryWorker(QThread):
                     else:
                         self.error_crc.emit()
                         self.log_ready.emit("[WARNING] CRC mismatch")
+                        mw = QApplication.activeWindow()
+                        if hasattr(mw, "notify"):
+                            mw.notify("CRC mismatch", "warning")
                         buf = buf[1:]
                 else:
                     buf = buf[1:]
@@ -432,6 +444,10 @@ class TelemetryPage(QWidget):
             v.setContentsMargins(10, 8, 10, 8)
             t = QLabel(title, objectName="title")
             val = QLabel("-", objectName="value")
+            val.setContextMenuPolicy(Qt.CustomContextMenu)
+            val.customContextMenuRequested.connect(
+                lambda pos, w=val: w.copy() if hasattr(w, 'copy') else QApplication.clipboard().setText(w.text())
+            )
             val.setAlignment(Qt.AlignCenter)
             val.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             v.addWidget(t); v.addWidget(val)
@@ -547,6 +563,25 @@ class GraphsPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QGridLayout(self)
+        # === System Monitor ===
+        import psutil
+        from PySide6.QtWidgets import QFrame, QLabel, QHBoxLayout
+        self.sys_frame = QFrame()
+        self.sys_frame.setObjectName("card")
+        h = QHBoxLayout(self.sys_frame)
+        self.cpu_label = QLabel("CPU: – %")
+        self.ram_label = QLabel("RAM: – %")
+        self.lat_label = QLabel("UDP Latency: – s")
+        for lbl in (self.cpu_label, self.ram_label, self.lat_label):
+            lbl.setStyleSheet("font-size:10pt; font-weight:bold;")
+            h.addWidget(lbl)
+        layout.addWidget(self.sys_frame, 0, 0, 1, 2)
+
+        # таймер обновления
+        from PySide6.QtCore import QTimer
+        self.sys_timer = QTimer(self)
+        self.sys_timer.timeout.connect(lambda: self._update_system_monitor(psutil))
+        self.sys_timer.start(1000)
         # Оборачиваем сетку в прокручиваемую область
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -619,6 +654,23 @@ class GraphsPage(QWidget):
                         row += 1
             layout.addWidget(w, row, col)
 
+    def _update_system_monitor(self, psutil):
+            # CPU и RAM
+            cpu = psutil.cpu_percent()
+            ram = psutil.virtual_memory().percent
+            # пытаемся получить MainWindow через self.window()
+            mw = self.window()
+            lat_text = "UDP Latency: N/A"
+            if mw and hasattr(mw, "worker"):
+                last = getattr(mw.worker, "last_data_time", None)
+                if last:
+                    lat = time.time() - last
+                    lat_text = f"UDP Latency: {lat:.2f}s"
+
+            # обновляем метки
+            self.cpu_label.setText(f"CPU: {cpu:.0f}%")
+            self.ram_label.setText(f"RAM: {ram:.0f}%")
+            self.lat_label.setText(lat_text)
 
     def create_chart(self, config):
         """Create a chart based on configuration"""
@@ -681,6 +733,12 @@ class GraphsPage(QWidget):
 
             for i in range(3):
                 series = QLineSeries()
+                # animate line drawing
+                series_animation = QPropertyAnimation(series, b"opacity", series)
+                series_animation.setDuration(500)
+                series_animation.setStartValue(0.0)
+                series_animation.setEndValue(1.0)
+                series_animation.start()
                 series.setName(axis_names[i])
                 pen = QPen()
                 pen.setColor(QColor(colors[i]))
@@ -1375,7 +1433,10 @@ class LogPage(QWidget):
         header.setStyleSheet(f"""
             font-size: 16pt; font-weight: bold; color: {COLORS['text_primary']}; margin-bottom:10px
         """)
-        self.log_text = QTextEdit(); self.log_text.setReadOnly(True)
+        self.log_text = QTextEdit();
+        self.log_text.setReadOnly(True)
+        # включить контекстное меню с Copy
+        self.log_text.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.log_text.setFont(QFont("Consolas",10))
         self.log_text.setStyleSheet(f"""
             QTextEdit {{ background: {COLORS['bg_dark']}; color: {COLORS['text_primary']};
@@ -1405,6 +1466,12 @@ class LogPage(QWidget):
         buttons_layout.addWidget(self.clear_btn)
         buttons_layout.addWidget(self.save_btn)
         buttons_layout.addWidget(self.export_btn)
+        # +++ Кнопка «Экспорт отчёта» +++
+        self.report_btn = QPushButton("Экспорт отчёта")
+        self.report_btn.setFixedHeight(40)
+        self.report_btn.setStyleSheet(self.export_btn.styleSheet())
+        self.report_btn.clicked.connect(self.export_report)
+        buttons_layout.addWidget(self.report_btn)
         buttons_layout.addStretch()
         layout.addWidget(header); layout.addWidget(self.log_text); layout.addLayout(buttons_layout)
 
@@ -1453,6 +1520,10 @@ class LogPage(QWidget):
 
     def clear_log(self):
         self.log_text.clear()
+        from PySide6.QtWidgets import QApplication
+        mw = QApplication.activeWindow()
+        if hasattr(mw, "notify"):
+            mw.notify("Logs cleared", "info")
 
     def save_log(self):
         now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -1461,9 +1532,16 @@ class LogPage(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self.log_text.toPlainText())
             self.add_log_message(f"[{datetime.datetime.now()}] Лог сохранен в {path}")
+            msg = f"[{datetime.datetime.now()}] Лог сохранен в {path}"
+            self.add_log_message(msg)
+            from PySide6.QtWidgets import QApplication
+            mw = QApplication.activeWindow()
+            if hasattr(mw, "notify"):
+                mw.notify("Log saved", "success")
         except Exception as e:
             self.add_log_message(f"[ERROR] Не удалось сохранить лог: {e}")
 
+    @Slot()
     def export_logs(self):
             # Запускаем фоновый поток для архивации
             self.add_log_message(f"[{datetime.datetime.now()}] Запуск экспорта ZIP...")
@@ -1471,10 +1549,77 @@ class LogPage(QWidget):
             self._export_thread.finished.connect(self._on_export_finished)
             self._export_thread.start()
 
+    @Slot()
+    def export_report(self):
+        """Экспорт всей сессии в HTML или PDF."""
+        from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtGui import QTextDocument
+        from PySide6.QtCore import QBuffer
+        from PySide6.QtPrintSupport import QPrinter
+
+        path, fmt = QFileDialog.getSaveFileName(
+            self, "Export report", "", "HTML Files (*.html);;PDF Files (*.pdf)"
+        )
+        if not path:
+            return
+
+        # Получаем главное окно
+        mw = self.window()
+
+        # Логи и ошибки
+        logs = self.log_text.toPlainText()
+        errors = "\n".join(self.error_list)
+
+        # Картинки графиков
+        imgs = {}
+        if hasattr(mw, "graphs"):
+            for name, chart_data in mw.graphs.charts.items():
+                pix = chart_data["view"].grab()
+                buf = QBuffer()
+                buf.open(QBuffer.ReadWrite)
+                pix.save(buf, "PNG")
+                b64 = buf.data().toBase64().data().decode()
+                imgs[name] = b64
+
+        # HTML
+        html = "<html><head><style>"
+        html += "body{background:#1a1a1a;color:#ffffff;font-family:Segoe UI;}"
+        html += ".card{background:#242424;padding:10px;margin:10px;border-radius:8px;}"
+        html += "h1,h2{color:" + COLORS["accent"] + ";}</style></head><body>"
+        html += "<h1>Telemetry Report</h1><h2>Logs</h2><pre>{}</pre>".format(logs)
+        html += "<h2>Errors</h2><pre>{}</pre><h2>Charts</h2>".format(errors)
+        for name, b64 in imgs.items():
+            html += f"<div class='card'><h3>{name}</h3>"
+            html += f"<img src='data:image/png;base64,{b64}'/></div>"
+        html += "</body></html>"
+
+        # Сохраняем HTML или PDF
+        if path.lower().endswith(".html"):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(html)
+            msg = f"HTML report saved to {path}"
+        else:
+            doc = QTextDocument()
+            doc.setHtml(html)
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            printer.setOutputFileName(path)
+            doc.print_(printer)
+            msg = f"PDF report saved to {path}"
+
+        # Лог и уведомление (один раз)
+        self.add_log_message(f"[AUTO] {msg}")
+        if hasattr(mw, "notify"):
+            mw.notify("Report exported", "success")
+
     @Slot(str, bool, str)
     def _on_export_finished(self, archive: str, success: bool, error: str):
         if success:
             self.add_log_message(f"[{datetime.datetime.now()}] Логи экспортированы в {archive}")
+            from PySide6.QtWidgets import QApplication
+            mw = QApplication.activeWindow()
+            if hasattr(mw, "notify"):
+                mw.notify("Logs ZIP exported", "success")
         else:
             self.add_log_message(f"[ERROR] Экспорт ZIP не удался: {error}")
 
@@ -1641,6 +1786,12 @@ class SettingsPage(QWidget):
             self.sim_enable.isChecked(),
             self.sim_file_path.text()
         )
+        # уведомляем
+        from PySide6.QtWidgets import QApplication
+        mw = QApplication.activeWindow()
+        if hasattr(mw, "notify"):
+            mw.notify("Settings saved", "success")
+
     def browse_sim_file(self):
         """Открыть диалог выбора бинарного файла для симуляции."""
         path, _ = QFileDialog.getOpenFileName(
@@ -1671,20 +1822,56 @@ class ConsolePage(QWidget):
     def __init__(self):
         super().__init__()
         self.setLayout(QVBoxLayout())
-        self.output = QTextEdit()
+        self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
+        ConsoleHighlighter(self.output)
         self.input = QLineEdit()
         self.input.setPlaceholderText("Введите команду и Enter…")
         self.layout().addWidget(self.output)
         self.layout().addWidget(self.input)
         self.input.returnPressed.connect(self._on_enter)
+        # история команд
+        import json, os
+        hist_file = "console_history.json"
+        if os.path.exists(hist_file):
+            try:
+                self._history = json.load(open(hist_file))
+            except: self._history = []
+        else:
+            self._history = []
+        self._hist_idx = -1
+        # перехват стрелок
+        self.input.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        from PySide6.QtCore import QEvent, Qt
+        if obj is self.input and ev.type() == QEvent.KeyPress:
+            key = ev.key()
+            if key in (Qt.Key_Up, Qt.Key_Down):
+                if not self._history:
+                    return False
+                # перемещаем индекс
+                if key == Qt.Key_Up:
+                    self._hist_idx = max(0, self._hist_idx - 1)
+                else:
+                    self._hist_idx = min(len(self._history)-1, self._hist_idx + 1)
+                # вставляем команду
+                self.input.setText(self._history[self._hist_idx])
+                return True
+        return super().eventFilter(obj, ev)
 
     def _on_enter(self):
         cmd = self.input.text().strip()
         if not cmd:
             return
+        # сохранить в историю
+        self._history.append(cmd)
+        self._hist_idx = len(self._history)
+        # сбросить файл
+        import json
+        json.dump(self._history, open("console_history.json","w"))
         # отобразить в консоли
-        self.output.append(f"> {cmd}")
+        self.output.appendPlainText(f"> {cmd}")
         # послать сигнал
         self.command_entered.emit(cmd)
         self.input.clear()
@@ -1693,13 +1880,79 @@ class ConsolePage(QWidget):
     command_entered = Signal(str)
 
     def write_response(self, text: str):
-        self.output.append(text)
+        self.output.appendPlainText(text)
 
+class ConsoleHighlighter(QSyntaxHighlighter):
+    def __init__(self, parent):
+        super().__init__(parent.document())
+        # правила
+        self.rules = []
+        def make(fmt, pattern):
+            self.rules.append((QRegularExpression(pattern), fmt))
+        # ключевые команды
+        fmt_cmd = QTextCharFormat(); fmt_cmd.setForeground(QColor(COLORS["accent"])); fmt_cmd.setFontWeight(QFont.Bold)
+        for kw in ["pause","resume","help","version","errors"]:
+            make(fmt_cmd, rf"\b{kw}\b")
+        # ошибки
+        fmt_err = QTextCharFormat(); fmt_err.setForeground(QColor(COLORS["danger"]))
+        make(fmt_err, r"\bERROR\b.*")
+        # предупреждения
+        fmt_w = QTextCharFormat(); fmt_w.setForeground(QColor(COLORS["warning"]))
+        make(fmt_w, r"\bWARNING\b.*")
+
+    def highlightBlock(self, text):
+        for expr, fmt in self.rules:
+            it = expr.globalMatch(text)
+            while it.hasNext():
+                m = it.next()
+                self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
+
+class Notification(QWidget):
+    """Всплывающее уведомление (toast)."""
+    def __init__(self, message, level="info", duration=3000, parent=None):
+        super().__init__(parent, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        # фон по уровню
+        bg = {
+            "info":    COLORS["info"],
+            "success": COLORS["success"],
+            "warning": COLORS["warning"],
+            "danger":  COLORS["danger"]
+        }.get(level, COLORS["info"])
+        # фон + тень
+        self.setStyleSheet(f"background-color:{bg}; border-radius:8px;")
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(0,4)
+        shadow.setColor(QColor(0,0,0,160))
+        self.setGraphicsEffect(shadow)
+        lbl = QLabel(message, self)
+        lbl.setStyleSheet(f"color:{COLORS['text_primary']}; padding:8px;")
+        lay = QHBoxLayout(self)
+        lay.addWidget(lbl)
+        self.adjustSize()
+        # fade in
+        self.setWindowOpacity(0.0)
+        anim_in = QPropertyAnimation(self, b"windowOpacity", self)
+        anim_in.setDuration(300)
+        anim_in.setStartValue(0.0)
+        anim_in.setEndValue(1.0)
+        anim_in.start()
+        # fade out по таймеру
+        def start_fade_out():
+            anim = QPropertyAnimation(self, b"windowOpacity", self)
+            anim.setDuration(500)
+            anim.setStartValue(1.0)
+            anim.setEndValue(0.0)
+            anim.finished.connect(self.close)
+            anim.start()
+        QTimer.singleShot(duration, start_fade_out)
 
 # === ГЛАВНОЕ ОКНО ===
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        import time
         self.setWindowTitle("Telemetry Dashboard")
         self.resize(1200, 700)
         apply_dark_theme(QApplication.instance())
@@ -1820,9 +2073,27 @@ class MainWindow(QMainWindow):
 
         # Start
         self.worker.start()
+        # — Горячие клавиши —
+        # Ctrl+P — пауза/возобновление
+        sc_pause = QShortcut(QKeySequence("Ctrl+P"), self)
+        sc_pause.activated.connect(lambda: self.tel.pause_btn.click())
+        # Ctrl+S — экспорт логов
+        sc_export = QShortcut(QKeySequence("Ctrl+S"), self)
+        sc_export.activated.connect(self.log_page.export_logs)
+        # Ctrl+R — сброс расположения графиков (reset layout)
+        sc_reset = QShortcut(QKeySequence("Ctrl+R"), self)
+        sc_reset.activated.connect(self.settings._reset_graph_layout)
         # Чтобы на старте и при сохранении настроек не вылезали уведомления:
         self.settings.save_settings()
         self.console.command_entered.connect(self._handle_console_command)
+
+    def notify(self, message: str, level: str="info"):
+        n = Notification(message, level, parent=self)
+        # позиция: правый нижний угол с отступом
+        x = self.geometry().right() - n.width() - 20
+        y = self.geometry().bottom() - n.height() - 20
+        n.move(x, y)
+        n.show()
 
     def eventFilter(self, obj, ev):
             if ev.type() == QEvent.Enter:
@@ -1869,30 +2140,56 @@ class MainWindow(QMainWindow):
             self.tel.update_values(data)
             self.graphs.update_charts(data)
             self.test.update_orientation(data)
+
+    @Slot()
+    def toggle_pause_shortcut(self):
+        # переключаем паузу так же, как кнопка
+        if self.worker.is_paused():
+            self.worker.resume()
+            self.log_page.add_log_message("[INFO] Resumed via Ctrl+P")
+        else:
+            self.worker.pause()
+            self.log_page.add_log_message("[INFO] Paused via Ctrl+P")
     @Slot(str)
     def _handle_console_command(self, cmd: str):
         import time
         cmd = cmd.lower()
         # help
         if cmd in ("help", "?"):
-            cmds = ["pause", "resume", "version", "help"]
-            self.console.write_response("Commands: " + ", ".join(cmds))
+            cmds = {
+                "pause":  "приостановить прием данных",
+                "resume": "продолжить прием",
+                "version":"версия программы",
+                "errors": "показать WARN/ERROR",
+                "help":   "список команд",
+            }
+            hotkeys = {
+                "Ctrl+P": "Pause/Resume",
+                "Ctrl+S": "Export logs ZIP",
+                "Ctrl+R": "Reset graph layout"
+            }
+            self.console.write_response("Commands:")
+            for k,v in cmds.items():
+                self.console.write_response(f"  {k:<7} — {v}")
+            self.console.write_response("Hotkeys:")
+            for k,v in hotkeys.items():
+                self.console.write_response(f"  {k:<7} — {v}")
             return
 
         # version
         if cmd == "version":
-            self.console.write_response("Grib Telemetry Dashboard v1.9.0 — program 'grib'")
+            self.console.write_response("Grib Telemetry Dashboard v1.7 — program 'grib'")
             return
 
         # pause/resume without data-check
         if cmd in ("pause", "resume"):
             if cmd == "pause":
-                self.worker.pause()
+                self.tel.pause_btn.click()
                 self.log_page.add_log_message("[INFO] Telemetry paused via console")
-                self.console.write_response("OK: paused")
+                self.console.write_response("OK: paused (button clicked)")
             else:
-                self.worker.resume()
-                self.console.write_response("OK: resumed")
+                self.tel.pause_btn.click()
+                self.console.write_response("OK: resumed (button clicked)")
             return
 
         # show errors/warnings from log
