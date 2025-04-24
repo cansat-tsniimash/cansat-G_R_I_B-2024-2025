@@ -1,23 +1,57 @@
-import sys, struct, math, datetime, os, socket, configparser, zipfile, time
+# 📦 Стандартные библиотеки Python
+import os
+import sys
+import math
+import time
+import socket
+import struct
+import zipfile
+import datetime
+import configparser
+
+from PySide6.QtWidgets import QMessageBox
+
+# 🌐 Настройка Qt API
+os.environ['QT_API'] = 'pyside6'
+
+from collections import deque
+
+from PySide6.QtCore import QEvent
+from PySide6.QtGui  import QCursor
+from PySide6.QtWidgets import QToolTip
+
+# 🖼️ PySide6 — Виджеты и интерфейс
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QStackedWidget, QFrame,
-    QGridLayout, QSplitter, QSizePolicy, QTextEdit, QLineEdit,
-    QCheckBox, QFileDialog, QScrollArea
+    QPushButton, QLabel, QStackedWidget, QFrame, QGridLayout,
+    QSizePolicy, QTextEdit, QLineEdit, QCheckBox, QFileDialog, QScrollArea,
+    QGraphicsDropShadowEffect, QSpinBox
 )
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QUrl, QPointF, QTimer
-from PySide6.QtGui import QPalette, QColor, QPixmap, QFont, QPainter, QPen
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 
+from PySide6.QtGui    import QDrag, QMouseEvent, QDropEvent, QDragEnterEvent, QDragMoveEvent
+from PySide6.QtCore   import QByteArray, QMimeData
+
+# 🔄 Qt Core — Сигналы, Слоты, Таймеры, Потоки
+from qtpy.QtCore import (
+    Qt, QThread, Signal, Slot, QPointF, QTimer
+)
+
+from PySide6.QtGui import QVector3D
+
+# 🎨 Qt GUI — Графика и Стили
+from qtpy.QtGui import (
+    QPalette, QColor, QFont, QPainter, QPen
+)
+
+# 📈 Qt Charts — Графики
+from qtpy.QtCharts import (
+    QChart, QChartView, QLineSeries, QValueAxis
+)
+
+# 📊 PyQtGraph — Быстрая 2D и 3D визуализация
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from pyqtgraph.opengl import MeshData, GLMeshItem
-
-from OpenGL.GL import (
-    GL_POLYGON_OFFSET_FILL,
-    glEnable, glPolygonOffset, glDisable
-)
 
 # === ПАРАМЕТРЫ ПАРСЕРА ===
 PL, R0 = 1000, 4000
@@ -31,8 +65,8 @@ COLORS = {
     "bg_dark": "#121212",         # Sidebar/darker areas
     "bg_card": "#252525",         # Card backgrounds
     "bg_panel": "#202020",        # Panel backgrounds
-    "accent": "#4fc3f7",          # Main accent color (light blue like in image)
-    "accent_darker": "#2196f3",   # Darker accent for hover
+    "accent": "#81c784",         # светло-зелёный
+    "accent_darker": "#66bb6a",  # чуть темнее
     "btn_normal": "#333333",      # Button normal state
     "btn_hover": "#444444",       # Button hover state
     "btn_active": "#555555",      # Button active state
@@ -44,8 +78,35 @@ COLORS = {
     "danger": "#e57373",          # Danger/error color
     "info": "#64b5f6",            # Info color
     "chart_grid": "#3a3a3a",      # Chart grid lines
-    "chart_bg": "#1e1e1e"         # Chart background (slightly lighter than dark bg)
+    "chart_bg": "#242424"        # Chart background (slightly lighter than dark bg)
 }
+
+class ExportLogsThread(QThread):
+    finished = Signal(str, bool, str)
+
+    def __init__(self, log_dir: str, parent=None):
+        super().__init__(parent)
+        self.log_dir = log_dir
+
+
+    def run(self):
+        # проверим, что папка существует и есть файлы
+        if not os.path.isdir(self.log_dir):
+            self.finished.emit("", False, f"Directory not found: {self.log_dir}")
+            return
+        files = [f for f in os.listdir(self.log_dir) if os.path.isfile(os.path.join(self.log_dir,f))]
+        if not files:
+            self.finished.emit("", False, f"No files in {self.log_dir} to zip")
+            return
+        now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        archive = os.path.join(self.log_dir, f"logs_{now}.zip")
+        try:
+            with zipfile.ZipFile(archive, 'w') as z:
+                for fn in files:
+                    z.write(os.path.join(self.log_dir, fn), arcname=fn)
+            self.finished.emit(archive, True, "")
+        except Exception as e:
+            self.finished.emit("", False, str(e))
 
 # === WORKER ДЛЯ UART + UDP + ЛОГОВ + CRC-ОШИБОК ===
 class TelemetryWorker(QThread):
@@ -53,8 +114,13 @@ class TelemetryWorker(QThread):
     packet_ready  = Signal(list)
     log_ready     = Signal(str)
     error_crc     = Signal()
+    sim_ended     = Signal()
     def __init__(self, port_name="COM3", baud=9600, parent=None):
         super().__init__(parent)
+        self.last_data_time = None
+        # для дросселя CRC‑варнингов
+        self.last_crc_warning = 0.0
+        self.crc_cooldown    = 1.0   # не более 1 варнинга в секунду
         self.port_name = port_name
         self.baud = baud
         self._running = True
@@ -77,11 +143,15 @@ class TelemetryWorker(QThread):
         headers = [f"field_{i}" for i in range(len(struct.unpack(STRUCT_FMT, b'\x00'*60)))]
         self.f_csv.write(";".join(headers) + "\n")
 
+        #from functools import reduce
+        #import operator
+        #def xor_block(self, data: bytes) -> int:
+            #return reduce(operator.xor, data, 0)
     def xor_block(self, data: bytes) -> int:
-        res = 0
-        for b in data:
-            res ^= b
-        return res
+            res = 0
+            for b in data:
+                res ^= b
+            return res
 
     @Slot(bool, str)
     def update_simulation(self, enabled, file_path):
@@ -129,8 +199,8 @@ class TelemetryWorker(QThread):
 
     def run(self):
         buf = b""
-        self.log_ready.emit("Telemetry thread started. Version 1.5.0")
-        self.log_ready.emit("Надёжная версия: 1.2.2")
+        self.log_ready.emit("Telemetry thread started. Version 1.9.0 ")
+        self.log_ready.emit("Надёжная версия: 1.9.0")
 
         while self._running:
             try:
@@ -139,6 +209,7 @@ class TelemetryWorker(QThread):
                     rcv = self.sim_f.read(60)
                     if not rcv:
                         self.log_ready.emit("[SIM] End of file reached")
+                        self.sim_ended.emit()      # <-- + эмитим сигнал о конце
                         break
                     time.sleep(1)  # чуть-чуть притормозим, как будто приходят данные
                 else:
@@ -189,6 +260,7 @@ class TelemetryWorker(QThread):
                             buf = buf[60:]
                             continue
                         self.data_ready.emit(data)
+                        self.last_data_time = time.time()
                         self.f_csv.write(";".join(str(x) for x in pkt) + "\n")
                         self.f_bin.write(chunk)
                         buf = buf[60:]
@@ -205,7 +277,7 @@ class TelemetryWorker(QThread):
             self.f_csv.close()
             self.log_ready.emit(f"[{datetime.datetime.now()}] TelemetryWorker stopped")
 
-
+    sim_ended = Signal()  # <-- новый сигнал
 
 # === ТЁМНАЯ ТЕМА ===
 def apply_dark_theme(app: QApplication):
@@ -221,6 +293,82 @@ def apply_dark_theme(app: QApplication):
     pal.setColor(QPalette.HighlightedText, Qt.white)
     app.setPalette(pal)
     app.setStyle("Fusion")
+
+    app.setStyleSheet(f"""
+        /* Карточки со светящимся бэкграундом и тенью */
+        QFrame#card {{
+            border-radius: 12px;
+            background-color: {COLORS['bg_dark']};
+            border: 1px solid {COLORS['chart_grid']};
+            padding: 16px;
+        }}
+        QFrame#card QCheckBox {{
+            spacing: 8px;
+            font-size: 10pt;
+            color: {COLORS['text_primary']};
+        }}
+        QFrame#card QSpinBox {{
+            min-width: 50px;
+            font-size: 10pt;
+            color: {COLORS['text_primary']};
+            background: {COLORS['bg_panel']};
+            border: 1px solid {COLORS['chart_grid']};
+            border-radius: 4px;
+            padding: 2px 4px;
+        }}
+        QPushButton#resetLayoutBtn {{
+            background-color: {COLORS['btn_normal']};
+            color: {COLORS['text_primary']};
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 10pt;
+        }}
+        QPushButton#resetLayoutBtn:hover {{
+            background-color: {COLORS['accent_darker']};
+        }}
+        QPushButton#resetLayoutBtn:pressed {{
+            background-color: {COLORS['accent']};
+        }}
+        QChartView {{
+            border-radius: 12px;
+            background-color: transparent;
+        }}
+        QScrollArea {{
+            border-radius: 10px;
+        }}
+        QPushButton {{
+            border: none;
+            border-radius: 8px;
+            padding: 8px 14px;
+            background-color: {COLORS['btn_normal']};
+            color: {COLORS['text_primary']};
+        }}
+        QPushButton:hover {{
+            background-color: {COLORS['btn_hover']};
+        }}
+        QToolTip {{
+            background-color: #202020;
+            color: #ffffff;
+            border: 1px solid #81c784;
+            border-radius: 4px;
+            padding: 4px;
+            font-size: 10pt;
+        }}
+        QPushButton:pressed {{
+            background-color: {COLORS['btn_active']};
+        }}
+        QLineEdit, QTextEdit, QPlainTextEdit {{
+            background-color: {COLORS['bg_panel']};
+            border: 1px solid {COLORS['chart_grid']};
+            border-radius: 6px;
+            padding: 6px;
+            color: {COLORS['text_primary']};
+        }}
+        QLabel {{
+            font-size: 10.5pt;
+        }}
+    """)
+
 
 # === СТРАНИЦА ТЕЛЕМЕТРИИ + ГРАФИКИ ===
 class TelemetryPage(QWidget):
@@ -248,6 +396,7 @@ class TelemetryPage(QWidget):
         layout.addWidget(self.pause_btn, 0, 0, 1, 2)
 
         self.cards = {}
+        self._last_values = {}
         labels = [
             ("Номер пакета",    "packet_num"),
             ("Время, мс",       "timestamp"),
@@ -268,22 +417,17 @@ class TelemetryPage(QWidget):
         ]
         for i, (title, key) in enumerate(labels):
             card = QFrame()
-            card.setStyleSheet(f"""
-                QFrame {{
-                    background: {COLORS["bg_card"]};
-                    border-radius: 6px;
-                    padding: 8px;
-                }}
-                QLabel#title {{
-                    color: {COLORS["text_secondary"]};
-                    font-size: 9pt;
-                }}
-                QLabel#value {{
-                    color: {COLORS["text_primary"]};
-                    font-size: 13pt;
-                    font-weight: bold;
-                }}
-            """)
+            card.setObjectName("card")
+            # включаем hover-события и фильтр
+            card.setAttribute(Qt.WA_Hover, True)
+            card.installEventFilter(self)
+            card.installEventFilter(self)
+            shadow = QGraphicsDropShadowEffect(card)
+            shadow.setBlurRadius(12)
+            shadow.setOffset(0, 4)
+            shadow.setColor(QColor(0, 0, 0, 80))
+            card.setGraphicsEffect(shadow)
+
             v = QVBoxLayout(card)
             v.setContentsMargins(10, 8, 10, 8)
             t = QLabel(title, objectName="title")
@@ -296,11 +440,13 @@ class TelemetryPage(QWidget):
 
     @Slot(dict)
     def update_values(self, data):
+        self._last_values = data.copy()
         if not self.pause_btn.isEnabled():
             self.pause_btn.setEnabled(True)
         for k, w in self.cards.items():
             if k in data:
                 v = data[k]
+                self._last_values[k] = data[k]
                 w.setText(
                     ", ".join(f"{x:.2f}" for x in v)
                     if isinstance(v, (list, tuple))
@@ -323,6 +469,24 @@ class TelemetryPage(QWidget):
         if self.series_acc.count() > 100:
             self.series_acc.remove(0)
 
+    def eventFilter(self, obj, ev):
+            from PySide6.QtCore import QEvent
+            from PySide6.QtGui  import QCursor
+            from PySide6.QtWidgets import QToolTip
+
+            if ev.type() in (QEvent.HoverEnter, QEvent.HoverMove):
+                # нашли карту, к которой относится obj
+                for key, label in self.cards.items():
+                    if label.parent() is obj:
+                        val = self._last_values.get(key, None)
+                        ts  = self._last_values.get("timestamp", None)
+                        QToolTip.showText(
+                            QCursor.pos(),
+                            f"<b>{key}</b><br>raw: {val}<br>ts: {ts}"
+                        )
+                        break
+            return super().eventFilter(obj, ev)
+
     @Slot()
     def toggle_pause(self):
         if hasattr(self, 'worker'):
@@ -335,6 +499,50 @@ class TelemetryPage(QWidget):
         self.worker = worker
 
         # + Replace the GraphsPage class with this enhanced version
+
+class DraggableCard(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def mousePressEvent(self, ev: QMouseEvent):
+        mime = QMimeData()
+        # передаём адрес объекта
+        mime.setData("application/x-card", QByteArray(str(id(self)).encode()))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.MoveAction)
+
+    def dragEnterEvent(self, ev: QDragEnterEvent):
+        if ev.mimeData().hasFormat("application/x-card"):
+            ev.acceptProposedAction()
+
+    def dragMoveEvent(self, ev: QDragMoveEvent):
+        if ev.mimeData().hasFormat("application/x-card"):
+            ev.acceptProposedAction()
+
+    def dropEvent(self, ev: QDropEvent):
+        source = ev.source()
+        target = self
+        if isinstance(source, DraggableCard) and source is not target:
+            layout = target.parent().layout()  # это QGridLayout
+
+            # найдём позицию source и target
+            idx_src = layout.indexOf(source)
+            idx_tgt = layout.indexOf(target)
+            r_src, c_src, _, _ = layout.getItemPosition(idx_src)
+            r_tgt, c_tgt, _, _ = layout.getItemPosition(idx_tgt)
+
+            # убираем виджеты из layout
+            layout.removeWidget(source)
+            layout.removeWidget(target)
+
+            # ставим обратно на swapped позиции
+            layout.addWidget(source, r_tgt, c_tgt)
+            layout.addWidget(target, r_src, c_src)
+
+        ev.acceptProposedAction()
+
 class GraphsPage(QWidget):
     def __init__(self):
         super().__init__()
@@ -353,7 +561,10 @@ class GraphsPage(QWidget):
         self.charts = {}
         self.indexes = {}
         self.data_points = {}  # Store maximum points to display
-        self.data_history = {}  # + Хранить историю значений для лучшего масштабирования
+        self.data_history     = {}      # Имя -> список значений
+        self.default_y_ranges = {}      # Имя -> исходный диапазон по Y
+        self.last_extreme     = {}      # Имя -> время последнего выхода за пределы
+        self.extreme_decay    = 5.0     # секунд до сброса к дефолтному диапазону
 
         # Define all the charts we want to display
         chart_configs = [
@@ -372,25 +583,42 @@ class GraphsPage(QWidget):
             {"name": "me2o2", "title": "ME2-O2, ppm", "color": "#90caf9", "y_range": [0, 25]}
         ]
 
+        # — load saved order —
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg.read("config.ini")
+        pos_map = {}
+        if cfg.has_option("Layout", "chart_positions"):
+            for token in cfg.get("Layout", "chart_positions").split(","):
+                name, rs, cs = token.split(":")
+                pos_map[name] = (int(rs), int(cs))
+
+        # Добавляем виджеты по сохранённым позициям, а незаписанные — в конец
+        used = set()
+        for config in chart_configs:
+            name = config["name"]
+            if name in pos_map:
+                r, c = pos_map[name]
+                w = self.create_chart(config)
+                layout.addWidget(w, r, c)
+                used.add(name)
+
         # Create charts
         row, col = 0, 0
         columns = 2  # Теперь две колонки вместо трех
         for config in chart_configs:
-            chart_view = self.create_chart(config)
-            # Компактный минимум и растягиваемость
-            chart_view.setMinimumSize(600, 350)
-            chart_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            layout.addWidget(chart_view, row, col)
-            # Store the max number of points to show
-            self.data_points[config["name"]] = 200  # Show more points for better visualization
-            # + Инициализировать историю данных
-            self.data_history[config["name"]] = []
+            name = config["name"]
+            if name in used:
+                continue
+            w = self.create_chart(config)
 
-            # Next position
-            col += 1
-            if col >= columns:  # 2 columns of charts
-                col = 0
-                row += 1
+            while layout.itemAtPosition(row, col) is not None:
+                    col += 1
+                    if col >= columns:
+                        col = 0
+                        row += 1
+            layout.addWidget(w, row, col)
+
 
     def create_chart(self, config):
         """Create a chart based on configuration"""
@@ -412,8 +640,8 @@ class GraphsPage(QWidget):
 
         # Styling
         chart.setBackgroundVisible(False)
-        chart.setBackgroundBrush(QColor(COLORS["bg_dark"]))
-        chart.setTitleBrush(QColor(COLORS["text_primary"]))
+        chart.setBackgroundVisible(True)
+        chart.setBackgroundBrush(Qt.transparent)
         chart.setTitleFont(QFont("Segoe UI", 12, QFont.Bold))
         chart.legend().setVisible(multi_axis)  # Show legend only for multi-axis charts
         chart.legend().setAlignment(Qt.AlignBottom)
@@ -422,23 +650,25 @@ class GraphsPage(QWidget):
 
         # Axes
         ax_x = QValueAxis()
-        ax_x.setLabelFormat("%i")
-        ax_x.setTitleText("Точка")
-        ax_x.setRange(0, 200)  # Show more points by default
+        ax_x.setLabelsVisible(True)
+        ax_x.setTitleText("")              # без заголовка, но подписи видны
         ax_x.setGridLineVisible(True)
-        ax_x.setMinorTickCount(4)
+        ax_x.setMinorGridLineVisible(True)
 
         ax_y = QValueAxis()
-        ax_y.setLabelFormat("%.2f")
-        ax_y.setRange(y_range[0], y_range[1])
+        ax_y.setLabelsVisible(True)
+        ax_y.setTitleText("")              # без заголовка, но подписи видны
         ax_y.setGridLineVisible(True)
-        ax_y.setMinorTickCount(4)
+        ax_y.setMinorGridLineVisible(True)
 
         # Styling axes
         for axis in [ax_x, ax_y]:
             axis.setLabelsColor(QColor(COLORS["text_secondary"]))
             axis.setTitleBrush(QColor(COLORS["text_secondary"]))
-            axis.setGridLineColor(QColor(COLORS["chart_grid"]))
+            ax_x.setGridLineColor(QColor(COLORS["chart_grid"]))
+            ax_x.setMinorGridLineColor(QColor(COLORS["chart_grid"]))
+            ax_y.setGridLineColor(QColor(COLORS["chart_grid"]))
+            ax_y.setMinorGridLineColor(QColor(COLORS["chart_grid"]))
             axis.setMinorGridLineColor(QColor("#2a2a2a"))
             axis.setTitleFont(QFont("Segoe UI", 9))
             axis.setLabelsFont(QFont("Segoe UI", 8))
@@ -454,8 +684,9 @@ class GraphsPage(QWidget):
                 series.setName(axis_names[i])
                 pen = QPen()
                 pen.setColor(QColor(colors[i]))
-                pen.setWidthF(2.5)
+                pen.setWidthF(2.0)
                 series.setPen(pen)
+                series.setUseOpenGL(True)  # для сглаживания
                 chart.addSeries(series)
 
                 # We must create separate Y axis for each series to avoid scaling issues
@@ -516,13 +747,27 @@ class GraphsPage(QWidget):
         chart_view.setRenderHint(QPainter.Antialiasing)
         chart_view.setRenderHint(QPainter.TextAntialiasing)
         chart_view.setRenderHint(QPainter.SmoothPixmapTransform)
-        chart_view.setBackgroundBrush(QColor(COLORS["bg_dark"]))
-        chart_view.setMinimumHeight(250)  # Set minimum height for better visibility
+        chart_view.setBackgroundBrush(Qt.transparent)
+        chart_view.setMinimumHeight(250)
+
+        # wrap into card for rounded background
+        wrapper = DraggableCard()
+        wrapper.setObjectName("card")
+        wrapper.setProperty("chart_name", name)
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0,0,0,0)
+        wrapper_layout.addWidget(chart_view)
+        # +++ кнопка Save PNG +++
+        btn = QPushButton("💾 Save PNG")
+        btn.setFixedHeight(24)
+        btn.setCursor(Qt.PointingHandCursor)
+        wrapper_layout.addWidget(btn, alignment=Qt.AlignRight)
+        btn.clicked.connect(lambda _, w=chart_view, n=name: self._save_chart_png(w, n))
 
         # Store the view reference
         self.charts[name]["view"] = chart_view
 
-        return chart_view
+        return wrapper
 
     def auto_scale_y_axis(self, name, data_values):
         """Automatically scale the Y axis based on current data values with improved logic"""
@@ -561,7 +806,9 @@ class GraphsPage(QWidget):
 
         current_axis_min = y_axis.min()
         current_axis_max = y_axis.max()
+        now = time.time()
         if new_min < current_axis_min or new_max > current_axis_max:
+            self.last_extreme[name] = now
             y_axis.setRange(new_min, new_max)
             # обновляем доп. оси в мульти-графиках
             if chart_data.get("multi_axis"):
@@ -572,18 +819,29 @@ class GraphsPage(QWidget):
                             axis.setRange(new_min, new_max)
             return
 
-        smooth_factor = 0.2  # Коэффициент сглаживания...
-        final_min = current_axis_min + (new_min - current_axis_min) * smooth_factor
-        final_max = current_axis_max + (new_max - current_axis_max) * smooth_factor
+            # --- Если длительное время не было экстремумов, сбрасываем к дефолту ---
+            if now - self.last_extreme[name] > self.extreme_decay:
+                dmin, dmax = self.default_y_ranges[name]
+                y_axis.setRange(dmin, dmax)
+                if chart_data.get("multi_axis"):
+                    chart = chart_data["chart"]
+                    for i, series in enumerate(chart_data["series"]):
+                        if i > 0:
+                            for axis in chart.axes(Qt.Vertical, series):
+                                axis.setRange(dmin, dmax)
+                return
+
+            # --- Постепенная подстройка диапазона (сглаженное сжатие) ---
+            contract_alpha = 0.1
+            final_min = current_axis_min + (new_min - current_axis_min) * contract_alpha
+            final_max = current_axis_max + (new_max - current_axis_max) * contract_alpha
         # + Плавное изменение масштаба вместо резкого
         current_axis_min = y_axis.min()
         current_axis_max = y_axis.max()
 
-        # + Применяем сглаживание для избежания "прыгающего" масштаба
-        smooth_factor = 0.2  # Коэффициент сглаживания (меньше - плавнее, но медленнее)
+        smooth_factor = 0.2  # Коэффициент сглаживания…
         final_min = current_axis_min + (new_min - current_axis_min) * smooth_factor
         final_max = current_axis_max + (new_max - current_axis_max) * smooth_factor
-
         # + Меняем масштаб только если разница существенная
         threshold = (current_axis_max - current_axis_min) * 0.1  # 10% порог изменения
         if (abs(final_min - current_axis_min) > threshold or
@@ -600,8 +858,54 @@ class GraphsPage(QWidget):
                             for axis in axes:
                                 axis.setRange(final_min, final_max)
 
+
+    @Slot(object, str)
+    def _save_chart_png(self, chart_view, name: str):
+        """Save given chart view to PNG via dialog."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Save chart «{name}» as PNG", f"{name}.png", "PNG Files (*.png)"
+        )
+        if path:
+            pix = chart_view.grab()
+            pix.save(path, "PNG")
+
+    def save_layout(self):
+        """Save current grid positions into config.ini as name:row:col,..."""
+        import configparser
+        # получаем layout, в котором лежат карточки
+        scroll = self.parent().findChild(QScrollArea)
+        content = scroll.widget()
+        layout = content.layout()  # QGridLayout
+
+        pairs = []
+        # для каждого элемента layout
+        for idx in range(layout.count()):
+            item = layout.itemAt(idx)
+            w = item.widget()
+            if not w: continue
+            name = w.property("chart_name")
+            # узнаём где он
+            r, c, rs, cs = layout.getItemPosition(idx)
+            pairs.append(f"{name}:{r}:{c}")
+
+        cfg = configparser.ConfigParser()
+        cfg.read("config.ini")
+        if "Layout" not in cfg:
+            cfg["Layout"] = {}
+        cfg["Layout"]["chart_positions"] = ",".join(pairs)
+        with open("config.ini", "w") as f:
+            cfg.write(f)
+
     @Slot(dict)
     def update_charts(self, data):
+        import time
+        now = time.time()
+        if not hasattr(self, '_last_chart_update'):
+            self._last_chart_update = 0
+        # не чаще 20 FPS
+        if now - self._last_chart_update < 0.05:
+            return
+        self._last_chart_update = now
         """Update all charts with new data"""
         for name, chart_data in self.charts.items():
             if name not in data:
@@ -698,10 +1002,10 @@ class GraphsPage(QWidget):
             # + Обновляем только по необходимости
             chart_data["view"].update()
 import numpy as np
-def load_mesh_obj(filename: str) -> MeshData:
+def load_mesh_obj(filename: str, max_faces: int = 1000) -> MeshData:
     """
-    Загружает Wavefront OBJ файл (вершины и грани) и возвращает MeshData.
-    Поддерживается триангуляция полигонов.
+    Загружает Wavefront OBJ файл и возвращает MeshData.
+    Делает триангуляцию и динамическое упрощение до max_faces треугольников.
     """
     verts = []
     faces = []
@@ -713,30 +1017,47 @@ def load_mesh_obj(filename: str) -> MeshData:
                 verts.append(tuple(map(float, parts)))
             elif line.startswith('f '):
                 parts = line.strip().split()[1:]
-                idx = []
-                for p in parts:
-                    v = p.split('/')[0]
-                    idx.append(int(v) - 1)
-                # Триангуляция (fan triangulation)
+                idx = [int(p.split('/')[0]) - 1 for p in parts]
+                # Триангуляция (fan)
                 if len(idx) == 3:
                     faces.append(idx)
                 else:
                     for i in range(1, len(idx) - 1):
                         faces.append([idx[0], idx[i], idx[i + 1]])
 
-    # ❗ Обязательно преобразуем в numpy массивы
+    # Конвертация в numpy
     vert_array = np.array(verts, dtype=np.float32)
     face_array = np.array(faces, dtype=np.int32)
 
+    # --- Оптимизация: если граней слишком много, уменьшаем до max_faces ---
+    total = face_array.shape[0]
+    if total > max_faces:
+        step = math.ceil(total / max_faces)
+        face_array = face_array[::step]
+
     return MeshData(vertexes=vert_array, faces=face_array)
-
-
 
 # Отключаем мыш. управление
 class NoMouseView(gl.GLViewWidget):
     def mousePressEvent(self, ev): pass
     def mouseMoveEvent(self, ev):  pass
     def wheelEvent(self, ev):      pass
+    def keyPressEvent(self, event):
+        # Полностью игнорируем события нажатия клавиш
+        event.ignore()
+
+# === Асинхронная загрузка 3D‑модели в отдельном потоке ===
+class ModelLoader(QThread):
+    loaded = Signal(object)  # отдаст MeshData
+
+    def __init__(self, obj_file: str, max_faces: int = 20000):
+        super().__init__()
+        self.obj_file = obj_file
+        self.max_faces = max_faces
+
+    def run(self):
+        mesh = load_mesh_obj(self.obj_file, max_faces=self.max_faces)
+        self.loaded.emit(mesh)
 
 
 class TestPage(QWidget):
@@ -752,14 +1073,22 @@ class TestPage(QWidget):
             "color:white; font-size:10px; background-color:rgba(0,0,0,100);"
             "padding:2px 4px; border-radius:3px;"
         )
+
+        self.obj_file = obj_file
+        self._loaded = False
+
+        def keyPressEvent(self, event):
+            # Игнорируем нажатия клавиш в TestPage
+            event.ignore()
+
         self.fps_label.setFixedSize(50,16)
         layout.addWidget(self.fps_label)
         self.view.setCameraPosition(distance=10)
-        self.view.setBackgroundColor(QColor(30,30,30))
+        self.view.setBackgroundColor(pg.mkColor(36, 36, 36))
         layout.addWidget(self.view)
 
         # Загружаем OBJ-модель
-        meshdata = load_mesh_obj(obj_file)
+        meshdata = load_mesh_obj(obj_file, max_faces=20000)
 
         # 1) Грани модели: ровный белый цвет, без ребер
         self.face_mesh = GLMeshItem(
@@ -786,25 +1115,161 @@ class TestPage(QWidget):
 
         self._adjust_camera(meshdata)
 
-        # Поворот и FPS
-        self.roll = self.pitch = self.yaw = 0.0
+        # Создаем оси координат для ориентации
+        axis_length = 5.0  # Длина осей
+        axis_x = gl.GLLinePlotItem(pos=np.array([[0,0,0], [axis_length,0,0]]), color=(1,0,0,1), width=2)
+        axis_y = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,axis_length,0]]), color=(0,1,0,1), width=2)
+        axis_z = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,axis_length]]), color=(0,0,1,1), width=2)
+
+        # Добавляем подписи к осям
+
+        # Добавляем элементы в сцену
+        # Добавляем их в виджет
+        self.view.addItem(axis_x)
+        self.view.addItem(axis_y)
+        self.view.addItem(axis_z)
+
+        # Сетка для привязки
+        grid_size = 10  # Размер сетки
+        grid_item = gl.GLGridItem(size=QVector3D(grid_size, grid_size, 1))
+        grid_item.setColor((0.5, 0.5, 0.5, 0.3))  # Полупрозрачный серый
+        self.view.addItem(grid_item)
+
+        # Добавляем индикаторы текущей ориентации
+        self.orientation_label = QLabel("Ориентация: 0.0, 0.0, 0.0")
+        self.orientation_label.setStyleSheet(
+            "color:white; font-size:10px; background-color:rgba(0,0,0,100);"
+            "padding:2px 4px; border-radius:3px;"
+        )
+        self.orientation_label.setFixedSize(200, 16)
+        layout.addWidget(self.orientation_label)
+
+        # Последние показания акселерометра
+                # +++ Sensor fusion init +++
+        self.accel = [0.0, 0.0, 0.0]           # последнее значение акселя
+        self.gyro  = [0.0, 0.0, 0.0]           # последнее значение гиры
+        self.roll = self.pitch = self.yaw = 0.0  # отфильтрованные углы (рад)
+        self.last_update = time.time()         # метка времени предыдущего кадра
+        self.alpha = 0.98                      # коэффициент комплементарного фильтра
         self.frame_count = 0
         self.last_fps_time = time.time()
 
         # Запускаем таймер на ~120 FPS
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_frame)
-        self.timer.start(8)
+        self.timer.start(12)
+
+        # === AHRS Madgwick + LPF accel ===
+        self.q = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)  # кватернион
+        self.beta = 0.1     # константа Madgwick (0.1…0.5, чем меньше — тем плавнее)
+        self.last_update = time.time()
+
+        # LPF для акселя
+        self.accel_lpf = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+        self.lpf_alpha = 0.5  # 0.0 — без фильтра, 1.0 — полностью старые данные
+
+        # Добавляем маркеры ориентации на модель
+        # Добавьте это в метод __init__ класса TestPage после создания edge_mesh:
+        # Маркер "нос" модели - красная точка (исправлено на −1 по X)
+        nose_point = gl.GLScatterPlotItem(pos=np.array([[-1, 0, 0]]), color=(1,0,0,1), size=10)
+        self.view.addItem(nose_point)
+
+        # Маркер "верх" модели - зеленая точка
+        top_point = gl.GLScatterPlotItem(pos=np.array([[0, 1, 0]]), color=(0,1,0,1), size=10)
+        self.view.addItem(top_point)
+
+        # Маркеры будут поворачиваться вместе с моделью
+        self.markers = [nose_point, top_point]
+
+        # === Начальная коррекция ориентации модели ===
+        # 1) Выравниваем «вверх/вниз» (модель лежала на боку)
+        # 2) Переворачиваем лицом к +X
+        for mesh in (self.face_mesh, self.edge_mesh):
+            mesh.rotate(-90, 1, 0, 0)   # повернуть вокруг X
+            mesh.rotate(180, 0, 1, 0)   # развернуть вокруг Y
+            # Если нужно подкрутить «вокруг Z», раскомментируй и поэкспериментируй:
+            # mesh.rotate(90, 0, 0, 1)
+
+        # Подправляем позицию маркера «нос» на +X
+        nose_point.setData(pos=np.array([[1, 0, 0]]), size=10)
+
+        # Коэффициент сглаживания итоговых углов (0=резко, 1=медленно)
+        self.angle_alpha = 0.95
+        self.smoothed    = {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
 
     @Slot(dict)
     def update_orientation(self, data):
-        gx, gy, gz = data.get('gyro', [0,0,0])
-        dt = 0.05
-        self.roll  += gx * dt
-        self.pitch += gy * dt
-        self.yaw   += gz * dt
+        # Сохраняем сырые данные
+        ax, ay, az = data.get('accel', [0.0, 0.0, 0.0])
+        gx, gy, gz = data.get('gyro',  [0.0, 0.0, 0.0])
+        # Перевод gyro → рад/с (если у тебя в deg/s, умножить на π/180)
+        self.gyro = np.array([num * 3.14 / 180 for num in [gx, gy, gz]], dtype=np.float64)
+        self.accel = np.array([ax, ay, az], dtype=np.float64)
 
     # +++ Добавляем новый метод для подстройки камеры +++
+
+    def madgwick_update(self, gx, gy, gz, ax, ay, az, dt):
+        """
+        Обновление кватерниона по алгоритму Madgwick.
+        gx,gy,gz в рад/с; ax,ay,az в g; dt в сек.
+        """
+        import math
+
+        # 1) LPF на аксель
+        raw = np.array([ax, ay, az], dtype=np.float64)
+        self.accel_lpf = self.lpf_alpha * self.accel_lpf + (1 - self.lpf_alpha) * raw
+        ax, ay, az = self.accel_lpf
+
+        # 2) нормируем аксель
+        norm = math.sqrt(ax*ax + ay*ay + az*az)
+        if norm == 0:
+            return
+        ax, ay, az = ax/norm, ay/norm, az/norm
+
+        # 3) текущий кватернион
+        w, x, y, z = self.q
+
+        # 4) вычисляем градиент коррекции (обратно Madgwick paper)
+        f1 = 2*(x*z - w*y) - ax
+        f2 = 2*(w*x + y*z) - ay
+        f3 = 2*(w*w - x*x - y*y + z*z) - az
+        J_11or24 = 2*y
+        J_12or23 = 2*z
+        J_13or22 = 2*w
+        J_14or21 = 2*x
+        J_32 = 2*J_14or21
+        J_33 = 2*J_11or24
+
+        # градиент
+        grad = np.array([
+            J_14or21 * f2 - J_11or24 * f1,
+            J_12or23 * f1 + J_13or22 * f2 - J_32 * f3,
+            J_12or23 * f2 - J_33 * f3 - J_13or22 * f1,
+            J_14or21 * f1 + J_11or24 * f2
+        ], dtype=np.float64)
+
+        # нормируем градиент
+        grad_norm = np.linalg.norm(grad)
+        if grad_norm != 0:
+            grad /= grad_norm
+
+        # 5) интегрируем производную кватерниона
+        qDot = 0.5 * np.array([
+            -x*gx - y*gy - z*gz,
+             w*gx + y*gz - z*gy,
+             w*gy - x*gz + z*gx,
+             w*gz + x*gy - y*gx
+        ], dtype=np.float64) - self.beta * grad
+
+        w += qDot[0] * dt
+        x += qDot[1] * dt
+        y += qDot[2] * dt
+        z += qDot[3] * dt
+
+        # 6) нормируем кватернион
+        q_norm = math.sqrt(w*w + x*x + y*y + z*z)
+        self.q = np.array([w/q_norm, x/q_norm, y/q_norm, z/q_norm], dtype=np.float64)
+
     def _adjust_camera(self, meshdata):
         # Получаем все вершины модели
         vertices = meshdata.vertexes()
@@ -826,13 +1291,66 @@ class TestPage(QWidget):
         self.view.opts['distance'] = size * 2.5  # Можно уменьшить или увеличить множитель для корректировки видимости
     # --- Конец вставки новых строк ---
 
-    def _on_frame(self):
-        # Применяем трансформации ко всем мешам
+    # --- + новый метод для сброса ориентации ---
+    def reset_orientation(self):
+        """Сбросить модель в начальное положение."""
+        self.roll = self.pitch = self.yaw = 0.0
         for mesh in (self.face_mesh, self.edge_mesh):
             mesh.resetTransform()
-            mesh.rotate(self.roll, 1,0,0)
-            mesh.rotate(self.pitch,0,1,0)
-            mesh.rotate(self.yaw,  0,0,1)
+        self.orientation_label.setText("Ориентация: R:0.0° P:0.0° Y:0.0°")
+
+    def _on_frame(self):
+        import math
+        now = time.time()
+        dt = now - self.last_update if self.last_update else 0.016
+        self.last_update = now
+
+        # обновляем кватернион через Madgwick
+        self.madgwick_update(
+            self.gyro[0], self.gyro[1], self.gyro[2],
+            self.accel[0], self.accel[1], self.accel[2],
+            dt
+        )
+
+        # извлекаем Эйлеровы углы из q
+        w, x, y, z = self.q
+        roll  = math.atan2(2*(w*x + y*z),    w*w - x*x - y*y + z*z)
+        pitch = math.asin(  max(-1.0, min(1.0, 2*(w*y - z*x))) )
+        yaw   = math.atan2(2*(w*z + x*y),    w*w + x*x - y*y - z*z)
+
+        # Перевод в градусы
+        r_deg = math.degrees(roll)
+        p_deg = math.degrees(pitch)
+        y_deg = math.degrees(yaw)
+
+        # Фильтруем мелкие колебания (<0.5°)
+        threshold = 2
+        if abs(r_deg) < threshold: r_deg = 0
+        if abs(p_deg) < threshold: p_deg = 0
+        if abs(y_deg) < threshold: y_deg = 0
+
+        # --- Сглаживаем углы ---
+        self.smoothed["roll"]  = self.smoothed["roll"]  * self.angle_alpha + r_deg  * (1 - self.angle_alpha)
+        self.smoothed["pitch"] = self.smoothed["pitch"] * self.angle_alpha + p_deg  * (1 - self.angle_alpha)
+        self.smoothed["yaw"]   = self.smoothed["yaw"]   * self.angle_alpha + y_deg  * (1 - self.angle_alpha)
+
+        # === Применяем только динамические сглаженные углы ===
+        for mesh in (self.face_mesh, self.edge_mesh):
+            mesh.resetTransform()  # сбросим предыдущие динамические повороты
+            mesh.rotate(-self.smoothed["yaw"],   0, 0, 1)
+            mesh.rotate( self.smoothed["pitch"], 0, 1, 0)
+            mesh.rotate(-self.smoothed["roll"],  1, 0, 0)
+
+        # Вращаем маркеры вместе с моделью (с тем же оффсетом)
+        # === Аналогично обновляем маркеры ===
+        for marker in self.markers:
+            marker.resetTransform()
+            marker.rotate( self.smoothed["yaw"],   0, 0, 1)
+            marker.rotate( self.smoothed["pitch"], 0, 1, 0)
+            marker.rotate( self.smoothed["roll"],  1, 0, 0)
+
+        # Обновляем надпись с ориентацией
+        self.orientation_label.setText(f"R:{r_deg:.1f}° P:{p_deg:.1f}° Y:{y_deg:.1f}°")
 
         # Считаем FPS
         self.frame_count += 1
@@ -846,88 +1364,12 @@ class TestPage(QWidget):
         # Обновляем вид
         self.view.update()
 
-# === СТРАНИЦА ДАТЧИКОВ ===
-class SensorsPage(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.current_data = {}
-        self.telemetry_ok = False
-        os.makedirs("sensor_images", exist_ok=True)
-        self.descriptions = {
-            "BMP280":       "Датчик давления и температуры.",
-            "Accelerometer":"Акселерометр: измеряет ускорение по трем осям.",
-            "Gyroscope":    "Гироскоп: измеряет угловую скорость.",
-            "Magnetometer": "Магнитометр: измеряет магнитное поле.",
-            "DS18B20":      "Термометр DS18B20: цифровая температура.",
-            "GPS":          "GPS-модуль: координаты и высота."
-        }
-        splitter = QSplitter(Qt.Horizontal, self)
-        left = QFrame(); left.setStyleSheet(f"QFrame {{ background: {COLORS['bg_dark']}; border-radius: 6px }}")
-        gl = QGridLayout(left); gl.setContentsMargins(15,15,15,15); gl.setSpacing(10)
-        self.sensor_names = list(self.descriptions.keys())
-        for i, name in enumerate(self.sensor_names):
-            btn = QPushButton(name); btn.setFixedSize(150,60)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {COLORS['btn_normal']};
-                    color: {COLORS['text_primary']};
-                    border-radius: 5px; font-weight: bold;
-                }}
-                QPushButton:hover {{ background: {COLORS['btn_hover']}; }}
-                QPushButton:pressed {{ background: {COLORS['btn_active']}; }}
-            """)
-            btn.clicked.connect(lambda _, n=name: self.show_sensor(n))
-            gl.addWidget(btn, i//2, i%2, Qt.AlignCenter)
-        splitter.addWidget(left)
-        right = QFrame(); right.setStyleSheet(f"QFrame {{ background: {COLORS['bg_panel']}; border-radius: 6px }}")
-        v = QVBoxLayout(right); v.setContentsMargins(20,20,20,20)
-        self.img_label = QLabel(); self.img_label.setFixedSize(240,240)
-        self.img_label.setAlignment(Qt.AlignCenter); self.img_label.setStyleSheet("background: #353535; border-radius: 8px")
-        self.info_label = QLabel("Выберите датчик"); self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet(f"""
-            color: {COLORS['text_primary']}; font-size: 12pt;
-            padding: 15px; background: {COLORS['bg_card']}; border-radius: 8px
-        """)
-        v.addWidget(self.img_label, alignment=Qt.AlignCenter); v.addSpacing(15); v.addWidget(self.info_label)
-        splitter.addWidget(right); splitter.setStretchFactor(1, 1)
-        layout = QVBoxLayout(self); layout.setContentsMargins(0,0,0,0); layout.addWidget(splitter)
-
-    @Slot(dict)
-    def update_data(self, data):
-        self.current_data = data; self.telemetry_ok = True
-
-    def show_sensor(self, name):
-        code = 202 if self.telemetry_ok else 101
-        img_path = os.path.join("sensor_images", f"{name}.png")
-        if os.path.isfile(img_path):
-            pix = QPixmap(img_path).scaled(self.img_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.img_label.setPixmap(pix)
-        else:
-            self.img_label.setPixmap(QPixmap())
-        val_text = ""
-        if self.telemetry_ok:
-            d = self.current_data
-            if name == "BMP280":
-                val_text = f"Темп: {d.get('temp_bmp',0):.2f} °C\nДавл.: {d.get('press_bmp',0):.0f} Па"
-            elif name == "Accelerometer":
-                v3=d.get('accel',[0,0,0]); val_text="Ускор.: "+", ".join(f"{x:.2f}" for x in v3)
-            elif name == "Gyroscope":
-                v3=d.get('gyro',[0,0,0]); val_text="Угл.скор.: "+", ".join(f"{x:.2f}" for x in v3)
-            elif name == "Magnetometer":
-                v3=d.get('mag',[0,0,0]); val_text="Магн.п.: "+", ".join(f"{x:.2f}" for x in v3)
-            elif name == "DS18B20":
-                val_text=f"Темп: {d.get('temp_ds',0):.2f} °C"
-            elif name == "GPS":
-                gps=d.get('gps',(0,0,0)); fix=d.get('gps_fix',0)
-                val_text=f"Коорд.: {gps[0]}, {gps[1]}\nВысота: {gps[2]}\nFix: {fix}"
-        desc = self.descriptions.get(name,"")
-        text = (f"<b>{name}</b><br>Код состояния: {code}<br>{desc}<br><br>{val_text}")
-        self.info_label.setText(text)
-
 # === СТРАНИЦА ЛОГОВ + ЭКСПОРТ В ZIP ===
 class LogPage(QWidget):
     def __init__(self):
         super().__init__()
+        auto_save_timer: QTimer = None
+        self.error_list: list[str] = []
         layout = QVBoxLayout(self); layout.setContentsMargins(15,15,15,15)
         header = QLabel("Системный журнал")
         header.setStyleSheet(f"""
@@ -947,16 +1389,19 @@ class LogPage(QWidget):
             btn.setFixedHeight(40)
             btn.setStyleSheet(f"""
                 QPushButton {{
-                    background: {COLORS['btn_normal']};
+                    background-color: {COLORS['bg_panel']};
                     color: {COLORS['text_primary']};
-                    border-radius:6px; font-size:11pt; padding:0 20px;
+                    border-radius:8px; font-size:11pt; padding:0 20px;
                 }}
-                QPushButton:hover {{ background: {COLORS['btn_hover']}; }}
-                QPushButton:pressed {{ background: {COLORS['btn_active']}; }}
+                QPushButton:hover {{ background-color: {COLORS['accent_darker']}; }}
+                QPushButton:pressed {{ background-color: {COLORS['accent']}; }}
             """)
         self.clear_btn.clicked.connect(self.clear_log)
         self.save_btn.clicked.connect(self.save_log)
         self.export_btn.clicked.connect(self.export_logs)
+        # авто-сохранение
+        self.auto_save_timer = QTimer(self)
+        self.auto_save_timer.timeout.connect(self._on_auto_save)
         buttons_layout.addWidget(self.clear_btn)
         buttons_layout.addWidget(self.save_btn)
         buttons_layout.addWidget(self.export_btn)
@@ -964,9 +1409,47 @@ class LogPage(QWidget):
         layout.addWidget(header); layout.addWidget(self.log_text); layout.addLayout(buttons_layout)
 
     @Slot(str)
+    def configure_auto_save(self, enabled: bool, interval_min: int):
+        if self.auto_save_timer.isActive():
+            self.auto_save_timer.stop()
+        if enabled:
+            self.auto_save_timer.start(interval_min * 60 * 1000)
+
+    @Slot()
+    def _on_auto_save(self):
+        # пометим, что это автосохранение
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.add_log_message(f"[AUTO] Автосохранение логов: {ts}")
+        self.save_log()
+
+    @Slot(str)
     def add_log_message(self, message):
-        self.log_text.append(message)
-        self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+        # Определяем уровень
+        level = "info"
+        if message.startswith("[ERROR]") or message.startswith("ERROR"):
+            level = "danger"
+        elif message.startswith("[WARNING]") or message.startswith("WARNING"):
+            level = "warning"
+
+        # Сохраняем WARN/ERROR в список
+        if level in ("warning", "danger"):
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.error_list.append(f"{ts} {message}")
+
+        # HTML-раскраска
+        color_map = {
+            "info":    COLORS["text_secondary"],
+            "warning": COLORS["warning"],
+            "danger":  COLORS["danger"],
+        }
+        color = color_map[level]
+        # QTextEdit.append поддерживает HTML
+        self.log_text.append(f'<span style="color:{color};">{message}</span>')
+
+        # Скроллим вниз
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
+        )
 
     def clear_log(self):
         self.log_text.clear()
@@ -982,95 +1465,79 @@ class LogPage(QWidget):
             self.add_log_message(f"[ERROR] Не удалось сохранить лог: {e}")
 
     def export_logs(self):
-        now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        archive = f"log/logs_{now}.zip"
-        try:
-            with zipfile.ZipFile(archive, 'w') as z:
-                for fn in os.listdir("log"):
-                    z.write(os.path.join("log", fn), arcname=fn)
+            # Запускаем фоновый поток для архивации
+            self.add_log_message(f"[{datetime.datetime.now()}] Запуск экспорта ZIP...")
+            self._export_thread = ExportLogsThread(log_dir="log")
+            self._export_thread.finished.connect(self._on_export_finished)
+            self._export_thread.start()
+
+    @Slot(str, bool, str)
+    def _on_export_finished(self, archive: str, success: bool, error: str):
+        if success:
             self.add_log_message(f"[{datetime.datetime.now()}] Логи экспортированы в {archive}")
-        except Exception as e:
-            self.add_log_message(f"[ERROR] Экспорт ZIP не удался: {e}")
+        else:
+            self.add_log_message(f"[ERROR] Экспорт ZIP не удался: {error}")
 
-# === СТРАНИЦА КАМЕРЫ ===
-class CameraPage(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout(self); layout.setContentsMargins(10,10,10,10)
-        header = QLabel("Видеопоток")
-        header.setStyleSheet(f"""
-            font-size:16pt; font-weight:bold; color:{COLORS['text_primary']}; margin-bottom:10px
-        """)
-        self.web_view = QWebEngineView(); self.web_view.setUrl(QUrl("about:blank"))
-        refresh_btn = QPushButton("⟳ Обновить страницу"); refresh_btn.setFixedHeight(40)
-        refresh_btn.setStyleSheet(f"""
-            QPushButton {{ background:{COLORS['btn_normal']}; color:{COLORS['text_primary']};
-            border-radius:6px; font-size:11pt; padding:0 20px; font-weight:bold }}
-            QPushButton:hover {{ background:{COLORS['btn_hover']}; }}
-            QPushButton:pressed {{ background:{COLORS['btn_active']}; }}
-        """)
-        refresh_btn.clicked.connect(self.web_view.reload)
-        self.url_label = QLabel("URL: [будет вставлен позже]")
-        self.url_label.setStyleSheet(f"color:{COLORS['text_secondary']}; font-style:italic")
-        layout.addWidget(header); layout.addWidget(self.web_view)
-        layout.addWidget(refresh_btn); layout.addWidget(self.url_label)
-
-    def set_url(self, url):
-        self.web_view.setUrl(QUrl(url))
-        self.url_label.setText(f"URL: {url}")
+    def get_errors(self) -> list[str]:
+        """Вернуть все WARN/ERROR сообщения."""
+        return self.error_list
 
 # === СТРАНИЦА НАСТРОЕК + .ini ===
 class SettingsPage(QWidget):
-    settings_changed = Signal(bool, str, int)
-    simulator_changed  = Signal(bool, str)
+    settings_changed      = Signal(bool, str, int)
+    simulator_changed     = Signal(bool, str)
+
     def __init__(self):
         super().__init__()
         self.cfg = configparser.ConfigParser()
         if os.path.isfile("config.ini"):
             self.cfg.read("config.ini")
-        udp = self.cfg.get("UDP", "enabled", fallback="False") == "True"
-        host = self.cfg.get("UDP", "host", fallback="127.0.0.1")
-        port = self.cfg.getint("UDP", "port", fallback=5005)
 
-        layout = QVBoxLayout(self); layout.setContentsMargins(20,20,20,20)
+        # --- Read saved settings ---
+        udp_enabled  = self.cfg.get("UDP", "enabled", fallback="False") == "True"
+        host         = self.cfg.get("UDP", "host",    fallback="127.0.0.1")
+        port         = self.cfg.getint("UDP", "port", fallback=5005)
+        sim_enabled  = self.cfg.get("Settings", "simulation",    fallback="False") == "True"
+        auto_save    = self.cfg.getboolean("Settings", "auto_save",            fallback=False)
+        auto_interval= self.cfg.getint    ("Settings", "auto_save_interval",  fallback=5)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+
         header = QLabel("Настройки")
         header.setStyleSheet(f"""
-            font-size:18pt; font-weight:bold; color:{COLORS['text_primary']}; margin-bottom:20px
+            font-size:18pt; font-weight:bold; color:{COLORS['text_primary']};
+            margin-bottom:20px
         """)
-        # UDP
+        layout.addWidget(header)
+
+        # --- UDP settings ---
         udp_card = QFrame()
-        udp_card.setStyleSheet(f"QFrame {{ background:{COLORS['bg_card']}; border-radius:8px; padding:15px }}")
+        udp_card.setObjectName("card")
         v = QVBoxLayout(udp_card)
-        lab = QLabel("<b>UDP настройки</b>"); lab.setStyleSheet("font-size:14pt;")
-        self.udp_enable = QCheckBox("Включить UDP отправку"); self.udp_enable.setChecked(udp)
-        self.udp_ip = QLineEdit(host); self.udp_ip.setPlaceholderText("IP адрес")
-        self.udp_port = QLineEdit(str(port)); self.udp_port.setPlaceholderText("Порт")
+        lab = QLabel("<b>UDP настройки</b>")
+        lab.setStyleSheet("font-size:14pt;")
+        self.udp_enable = QCheckBox("Включить UDP отправку")
+        self.udp_enable.setChecked(udp_enabled)
+        self.udp_ip     = QLineEdit(host)
+        self.udp_ip.setPlaceholderText("IP адрес")
+        self.udp_port   = QLineEdit(str(port))
+        self.udp_port.setPlaceholderText("Порт")
         for w in (lab, self.udp_enable, self.udp_ip, self.udp_port):
             v.addWidget(w)
-        self.save_btn = QPushButton("Сохранить настройки")
-        self.save_btn.setFixedHeight(40)
-        self.save_btn.setStyleSheet(f"""
-            QPushButton {{ background:{COLORS['btn_normal']}; color:{COLORS['text_primary']};
-            border-radius:6px; font-size:11pt; padding:0 20px }}
-            QPushButton:hover {{ background:{COLORS['btn_hover']}; }}
-            QPushButton:pressed {{ background:{COLORS['btn_active']}; }}
-        """)
-        self.save_btn.clicked.connect(self.save_settings)
-        layout.addWidget(header)
         layout.addWidget(udp_card)
 
-        # --- Блок имитации из файла ---
+        # --- Simulation from file ---
         sim_card = QFrame()
-        sim_card.setStyleSheet(f"QFrame {{ background:{COLORS['bg_card']}; border-radius:8px; padding:15px }}")
+        sim_card.setObjectName("card")
         v2 = QVBoxLayout(sim_card)
         lab2 = QLabel("<b>Имитация из файла</b>")
-        self.sim_enable = QCheckBox("Включить имитацию")
+        self.sim_enable    = QCheckBox("Включить имитацию")
+        self.sim_enable.setChecked(sim_enabled)
         self.sim_file_path = QLineEdit()
         self.sim_file_path.setPlaceholderText("Путь к бинарному лог-файлу")
         self.sim_file_path.setReadOnly(True)
         btn_browse = QPushButton("Выбрать файл")
         btn_browse.clicked.connect(self.browse_sim_file)
-        # Разметка
         v2.addWidget(lab2)
         v2.addWidget(self.sim_enable)
         hl = QHBoxLayout()
@@ -1078,44 +1545,102 @@ class SettingsPage(QWidget):
         hl.addWidget(btn_browse)
         v2.addLayout(hl)
         layout.addWidget(sim_card)
-        # Блок имитации недоступен, если включён UDP
-        self.udp_enable.stateChanged.connect(
-            lambda s: (
-                self.sim_enable.setEnabled(not s),
-                self.sim_file_path.setEnabled(not s),
-                btn_browse.setEnabled(not s)
-            )
-        )
-        # установить начальное состояние
-        self.sim_enable.setEnabled(not udp)
-        self.sim_file_path.setEnabled(not udp)
-        btn_browse.setEnabled(not udp)
 
+        # Disable simulation block when UDP is on
+        # Когда включаем UDP — выключаем симуляцию, и наоборот
+        self.udp_enable.stateChanged.connect(lambda state: (
+            # если UDP включили — убираем галочку и блокируем симуляцию
+            self.sim_enable.setChecked(False) if state else None,
+            self.sim_enable.setEnabled(not state),
+            self.sim_file_path.setEnabled(not state),
+            btn_browse.setEnabled(not state)
+        ))
+        self.sim_enable.stateChanged.connect(lambda state: (
+            # если симуляцию включили — убираем галочку и блокируем UDP
+            self.udp_enable.setChecked(False) if state else None,
+            self.udp_enable.setEnabled(not state),
+            self.udp_ip.setEnabled(not state),
+            self.udp_port.setEnabled(not state)
+        ))
+        # initial enable/disable
+        self.sim_enable.setEnabled(not udp_enabled)
+        self.sim_file_path.setEnabled(not udp_enabled)
+        btn_browse.setEnabled(not udp_enabled)
 
-
-        #🔼 Конец вставки имитатора
-
-        # кнопка «Сохранить» и отступ внизу
+        # --- Save button ---
+        self.save_btn = QPushButton("Сохранить настройки")
+        self.save_btn.setFixedHeight(40)
+        self.save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {COLORS["bg_panel"]};
+                color:{COLORS['text_primary']};
+                border-radius:6px; font-size:11pt;
+                padding:0 20px
+            }}
+            QPushButton:hover {{ background: {COLORS["accent_darker"]}; }}
+            QPushButton:pressed {{ background: {COLORS["accent"]}; }}
+        """)
+        self.save_btn.clicked.connect(self.save_settings)
         layout.addWidget(self.save_btn)
+        # --- Auto-save logs every N minutes ---
+        # wrap into card
+        auto_card = QFrame()
+        auto_card.setObjectName("card")
+        v_auto = QVBoxLayout(auto_card)
+        self.auto_save_chk = QCheckBox("Автосохранение логов каждые N минут")
+        self.auto_save_spin = QSpinBox()
+        self.auto_save_spin.setRange(1, 60)
+        self.auto_save_chk.setChecked(auto_save)
+        self.auto_save_spin.setValue(auto_interval)
+        h = QHBoxLayout()
+        h.addWidget(self.auto_save_chk)
+        h.addWidget(self.auto_save_spin)
+        v_auto.addLayout(h)
+        layout.addWidget(auto_card)
+        # --- Reset graph layout ---
+        self.reset_layout_btn = QPushButton("Сбросить расположение графиков")
+        self.reset_layout_btn.setObjectName("resetLayoutBtn")
+        self.reset_layout_btn.setFixedHeight(30)
+        self.reset_layout_btn.clicked.connect(self._reset_graph_layout)
+        # wrap reset button into its own card
+        reset_card = QFrame()
+        reset_card.setObjectName("card")
+        v_reset = QVBoxLayout(reset_card)
+        v_reset.addWidget(self.reset_layout_btn, alignment=Qt.AlignCenter)
+        layout.addWidget(reset_card)
         layout.addStretch()
-
     def save_settings(self):
+        # UDP section
         self.cfg["UDP"] = {
             "enabled": str(self.udp_enable.isChecked()),
-            "host": self.udp_ip.text(),
-            "port": self.udp_port.text()
+            "host":    self.udp_ip.text(),
+            "port":    self.udp_port.text()
         }
+        # Settings section (simulation)
+        if "Settings" not in self.cfg:
+            self.cfg["Settings"] = {}
+        self.cfg["Settings"]["simulation"]    = str(self.sim_enable.isChecked())
+
+        # store auto-save into cfg
+        self.cfg["Settings"]["auto_save"] = str(self.auto_save_chk.isChecked())
+        self.cfg["Settings"]["auto_save_interval"] = str(self.auto_save_spin.value())
+        # Write to file
         with open("config.ini", "w") as f:
             self.cfg.write(f)
-        enabled = self.udp_enable.isChecked()
-        host = self.udp_ip.text()
-        port = int(self.udp_port.text() or 0)
-        self.settings_changed.emit(enabled, host, port)
-        # эмитируем настройки симулятора
-        sim_enabled = self.sim_enable.isChecked()
-        sim_path    = self.sim_file_path.text()
-        self.simulator_changed.emit(sim_enabled, sim_path)
+        # store auto-save
+        self.cfg["Settings"]["auto_save"] = str(self.auto_save_chk.isChecked())
+        self.cfg["Settings"]["auto_save_interval"] = str(self.auto_save_spin.value())
 
+        # Emit signals
+        self.settings_changed.emit(
+            self.udp_enable.isChecked(),
+            self.udp_ip.text(),
+            int(self.udp_port.text() or 0)
+        )
+        self.simulator_changed.emit(
+            self.sim_enable.isChecked(),
+            self.sim_file_path.text()
+        )
     def browse_sim_file(self):
         """Открыть диалог выбора бинарного файла для симуляции."""
         path, _ = QFileDialog.getOpenFileName(
@@ -1127,16 +1652,67 @@ class SettingsPage(QWidget):
         if path:
             self.sim_file_path.setText(path)
 
+    def _reset_graph_layout(self):
+        """Сбросить сохранённый порядок графиков."""
+        import configparser
+        from PySide6.QtWidgets import QMessageBox
+
+        cfg = configparser.ConfigParser()
+        cfg.read("config.ini")
+        if cfg.has_section("Layout") and cfg.has_option("Layout", "graph_order"):
+            cfg.remove_option("Layout", "graph_order")
+            with open("config.ini", "w") as f:
+                cfg.write(f)
+        QMessageBox.information(self, "Сброс",
+                                "Порядок графиков сброшен. Перезапустите приложение.")
+
+class ConsolePage(QWidget):
+    """Простейшая консоль для команд TelemetryWorker."""
+    def __init__(self):
+        super().__init__()
+        self.setLayout(QVBoxLayout())
+        self.output = QTextEdit()
+        self.output.setReadOnly(True)
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("Введите команду и Enter…")
+        self.layout().addWidget(self.output)
+        self.layout().addWidget(self.input)
+        self.input.returnPressed.connect(self._on_enter)
+
+    def _on_enter(self):
+        cmd = self.input.text().strip()
+        if not cmd:
+            return
+        # отобразить в консоли
+        self.output.append(f"> {cmd}")
+        # послать сигнал
+        self.command_entered.emit(cmd)
+        self.input.clear()
+
+    # сигнал команд
+    command_entered = Signal(str)
+
+    def write_response(self, text: str):
+        self.output.append(text)
+
+
 # === ГЛАВНОЕ ОКНО ===
 class MainWindow(QMainWindow):
-    # In MainWindow class, modify the init method to include a more modern sidebar:
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Telemetry Dashboard")
-        self.resize(1200, 700)  # Slightly larger default size
+        self.resize(1200, 700)
         apply_dark_theme(QApplication.instance())
 
-        # Create main layout with sidebar and content
+        # Pages
+        self.tel      = TelemetryPage()
+        self.graphs   = GraphsPage()
+        self.log_page = LogPage()
+        self.settings = SettingsPage()
+        self.console  = ConsolePage()
+        self.test     = TestPage("models/grib.obj")
+
+        # Layout: sidebar + content
         main_widget = QWidget()
         main_layout = QHBoxLayout(main_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -1145,37 +1721,35 @@ class MainWindow(QMainWindow):
         # Sidebar
         sidebar = QWidget()
         sidebar.setFixedWidth(220)
-        sidebar.setStyleSheet(f"background-color: {COLORS['bg_dark']};")
+        sidebar.setStyleSheet(f"background-color: {COLORS['bg_main']};")
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(15, 30, 15, 20)
         sidebar_layout.setSpacing(10)
 
-        # Navigation menu items
         menu_items = [
             {"name": "Telemetry", "icon": "📊", "index": 0},
-            {"name": "Graphs", "icon": "📈", "index": 1},
-            {"name": "Sensors", "icon": "🔌", "index": 2},
-            {"name": "Logs", "icon": "📝", "index": 3},
-            {"name": "Camera", "icon": "🎥", "index": 4},
-            {"name": "Settings", "icon": "⚙️", "index": 5},
-            {"name": "Test",      "icon": "🧪", "index": 6}
+            {"name": "Graphs",    "icon": "📈", "index": 1},
+            {"name": "Logs",      "icon": "📝", "index": 2},
+            {"name": "Settings",  "icon": "⚙️", "index": 3},
+            {"name": "Console",   "icon": "💻", "index": 4},
+            {"name": "Test",      "icon": "🧪", "index": 5}
         ]
-
         self.nav_buttons = []
         for item in menu_items:
             btn = QPushButton(f" {item['icon']} {item['name']}")
             btn.setProperty("index", item["index"])
+            btn.setCheckable(True)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     text-align: left;
                     padding: 12px 15px;
                     border-radius: 8px;
-                    color: {COLORS['text_secondary']};
+                    color: {COLORS['text_primary']};
                     background: transparent;
                     font-size: 14px;
                 }}
                 QPushButton:hover {{
-                    background: {COLORS['btn_hover']};
+                    background: {COLORS['accent_darker']};
                     color: {COLORS['text_primary']};
                 }}
                 QPushButton:checked {{
@@ -1184,79 +1758,82 @@ class MainWindow(QMainWindow):
                     font-weight: bold;
                 }}
             """)
-            btn.setCheckable(True)
             btn.clicked.connect(lambda _, idx=item["index"], b=btn: self.on_nav_click(idx, b))
             self.nav_buttons.append(btn)
             sidebar_layout.addWidget(btn)
 
-        # Make first button selected by default
         self.nav_buttons[0].setChecked(True)
-
         sidebar_layout.addStretch()
         main_layout.addWidget(sidebar)
 
-        # Content area
-        content_area = QWidget()
+        # Content
+        content_area   = QWidget()
         content_layout = QVBoxLayout(content_area)
         content_layout.setContentsMargins(20, 20, 20, 20)
 
-        # Menu button for mobile (can be hidden on desktop)
-        menu_btn = QPushButton("≡")
-        menu_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {COLORS['accent']};
-                color: white;
-                font-size: 18px;
-                font-weight: bold;
-                border-radius: 20px;
-                padding: 5px 15px;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['accent_darker']};
-            }}
-        """)
-        menu_btn.setFixedSize(40, 40)
-
-        # Stack of pages
         self.stack = QStackedWidget()
         self.stack.setStyleSheet(f"background: {COLORS['bg_main']};")
-
-        # Add pages to stack
-        self.tel = TelemetryPage()
-        self.graphs = GraphsPage()
-        self.sens = SensorsPage()
-        self.log_page = LogPage()
-        self.camera = CameraPage()
-        self.settings = SettingsPage()
-        self.test = TestPage("models/grib.obj")
-        for w in (self.tel, self.graphs, self.sens, self.log_page, self.camera, self.settings, self.test):
-            self.stack.addWidget(w)
-
+        for page in (self.tel, self.graphs, self.log_page, self.settings, self.console, self.test):
+            self.stack.addWidget(page)
         content_layout.addWidget(self.stack)
         main_layout.addWidget(content_area)
 
         self.setCentralWidget(main_widget)
 
-        #self.tabs.addTab(self.settings, "Настройки")
-        #self.tabs.addTab(self.graphs, "Графики")
-        #self.setCentralWidget(self.tabs)
-
-        # Запускаем worker
+        # Telemetry worker
         self.worker = TelemetryWorker("COM3", 9600)
+
+        # Буфер пакетов и таймер для отложенного UI-обновления
+        self.packet_buffer = deque()
+        self.ui_timer      = QTimer(self)
+        self.ui_timer.timeout.connect(self.flush_buffered_packets)
+        self.ui_timer.start(50)  # обновлять UI не чаще чем раз в 50 ms
+
+        self.worker.sim_ended.connect(self.test.reset_orientation)
+
         self.tel.set_worker(self.worker)
-        self.worker.data_ready.connect(self.tel.update_values)
-        self.worker.data_ready.connect(self.graphs.update_charts)
-        self.worker.data_ready.connect(self.sens.update_data)
+        self.worker.data_ready.connect(self.packet_buffer.append)
         self.worker.log_ready.connect(self.log_page.add_log_message)
         self.worker.error_crc.connect(QApplication.beep)
-        # UDP settings
-        self.settings.settings_changed.connect(self.worker.update_udp)
-        # Simulation settings
-        self.settings.simulator_changed.connect(self.on_simulator_changed)
-        # передать начальные из .ini
-        self.worker.start()
+
+        # Сначала сохраняем настройки, без подключённых слотов — чтобы не было всплывашек на старте
         self.settings.save_settings()
-        self.worker.data_ready.connect(self.test.update_orientation)
+        # Теперь подключаем обработчики сигналов
+        self.settings.settings_changed.connect(self.worker.update_udp)
+        self.settings.simulator_changed.connect(self.on_simulator_changed)
+        # автосохранение логов
+        self.settings.save_settings()  # чтобы cfg обновился
+        self.log_page.configure_auto_save(
+            self.settings.auto_save_chk.isChecked(),
+            self.settings.auto_save_spin.value()
+        )
+        self.settings.auto_save_chk.stateChanged.connect(
+            lambda s: self.log_page.configure_auto_save(
+                bool(s), self.settings.auto_save_spin.value()
+            )
+        )
+        self.settings.auto_save_spin.valueChanged.connect(
+            lambda v: self.log_page.configure_auto_save(
+                self.settings.auto_save_chk.isChecked(), v
+            )
+        )
+
+        # Start
+        self.worker.start()
+        # Чтобы на старте и при сохранении настроек не вылезали уведомления:
+        self.settings.save_settings()
+        self.console.command_entered.connect(self._handle_console_command)
+
+    def eventFilter(self, obj, ev):
+            if ev.type() == QEvent.Enter:
+                # нашли какой ключ за этим card
+                for key, lbl in self.cards.items():
+                    if lbl.parent() is obj:
+                        val = self._last_values.get(key, None)
+                        ts  = self._last_values.get("timestamp", "")
+                        QToolTip.showText(QCursor.pos(), f"{key}\nraw: {val}\n ts: {ts}")
+                        break
+            return super().eventFilter(obj, ev)
 
     def on_nav_click(self, idx, btn):
         for b in self.nav_buttons:
@@ -1265,28 +1842,72 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(idx)
 
     def on_simulator_changed(self, enabled: bool, filepath: str):
-        """Обработчик включения симуляции из файла."""
         self.worker.sim_enabled = enabled
         if enabled:
             try:
-                # открываем файл только при включении симуляции
                 self.worker.sim_f = open(filepath, "rb")
             except Exception as e:
                 print(f"[Ошибка открытия файла симуляции]: {e}")
-                # отключаем симуляцию при неудаче
                 self.worker.sim_enabled = False
-
-    def on_change(self, idx):
-        self.stack.setCurrentIndex(idx)
+        self.test.reset_orientation()
 
     def closeEvent(self, event):
+        # save graph layout
+        try:
+            self.graphs.save_layout()
+        except Exception:
+            pass
         self.worker.stop()
         self.worker.wait(1000)
         super().closeEvent(event)
+
+    def flush_buffered_packets(self):
+        # Берём только самый свежий пакет и сбрасываем устаревшие
+        if self.packet_buffer:
+            data = self.packet_buffer.pop()
+            self.packet_buffer.clear()
+            self.tel.update_values(data)
+            self.graphs.update_charts(data)
+            self.test.update_orientation(data)
+    @Slot(str)
+    def _handle_console_command(self, cmd: str):
+        import time
+        cmd = cmd.lower()
+        # help
+        if cmd in ("help", "?"):
+            cmds = ["pause", "resume", "version", "help"]
+            self.console.write_response("Commands: " + ", ".join(cmds))
+            return
+
+        # version
+        if cmd == "version":
+            self.console.write_response("Grib Telemetry Dashboard v1.9.0 — program 'grib'")
+            return
+
+        # pause/resume without data-check
+        if cmd in ("pause", "resume"):
+            if cmd == "pause":
+                self.worker.pause()
+                self.log_page.add_log_message("[INFO] Telemetry paused via console")
+                self.console.write_response("OK: paused")
+            else:
+                self.worker.resume()
+                self.console.write_response("OK: resumed")
+            return
+
+        # show errors/warnings from log
+        if cmd in ("errors", "show errors", "warnings"):
+            errs = self.log_page.get_errors()
+            if not errs:
+                self.console.write_response("No warnings or errors.")
+            for e in errs:
+                self.console.write_response(e)
+            return
+
+        self.console.write_response(f"Unknown command: {cmd}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
-    window.camera.set_url("https://sporadic.ru/cams/")
     sys.exit(app.exec())
