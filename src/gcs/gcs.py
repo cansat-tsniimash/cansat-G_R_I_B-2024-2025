@@ -20,6 +20,26 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+# ================================
+
+def calculate_mq4_ppm(voltage):
+    # Constants from MQ-4 datasheet
+    PL = 20000.0  # Load resistor in ohms
+    R0 = 4000.0   # Sensor resistance in clean air
+    NAKLON = -0.374  # Slope
+    SMESHENIE = 1.101  # Intercept
+    SCALE = 10 ** (-SMESHENIE / NAKLON)
+    
+    # Calculate sensor resistance
+    sensor_resistance = (3.3 - voltage) * PL / voltage
+    
+    # Calculate ratio to clean air
+    ratio = sensor_resistance / R0
+    
+    # Apply formula for PPM calculation
+    ppm = ratio ** (1.0 / NAKLON) * SCALE
+    
+    return ppm
 
 # Настройка UDP сервера
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -92,7 +112,7 @@ GPIO.setup(E220_M1_PIN, GPIO.OUT)
 GPIO.setup(E220_AUX_PIN, GPIO.IN)
 
 # Открытие порта
-port = serial.Serial("/dev/ttyUSB0", baudrate=9600, timeout=0.3)
+port = serial.Serial("/dev/ttyUSB1", baudrate=9600, timeout=0.3)
 
 # Файлы лога данных
 binfile = f"log/grib_{current_datetime}.bin"
@@ -242,21 +262,21 @@ try:
                     print("Контрольная сумма сошлась")
                     print("Н.пакета", pack[12])
                     print("Время:", pack[2])
-                    print("Темп BMP", pack[3] / 100)
-                    print("Давл BMP", pack[4])
-                    print("Ускор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*accel))
-                    print("Угл.скор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*gyro))
-                    print("Сост.апарт", pack[13])
+                    #print("Темп BMP", pack[3] / 100)
+                    #print("Давл BMP", pack[4])
+                    #print("Ускор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*accel))
+                    #print("Угл.скор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*gyro))
                     print("Сост.апарт", pack[13] & 0x07)
                     print("Фото.рез {:2.2f}".format(pack[14] / 1000))
-                    print("Магнит.поле", magnet)
-                    print("Магнит.поле {:4.2f} {:4.2f} {:4.2f}".format(*magnet))
-                    print("Темп DS18 {:4.2f}".format(pack[18] / 16))
-                    print("GPS {:3.6f} {:3.6f} {:4.2f}".format(*pack[19:22]))
-                    print("GPS fix", pack[22])
-                    print("SCD41", pack[23])
-                    print("MQ4", pack[24])
-                    print("me2o2f20", pack[25])
+                    #print("Магнит.поле {:4.2f} {:4.2f} {:4.2f}".format(*magnet))
+                    #print("Темп DS18 {:4.2f}".format(pack[18] / 16))
+                    #print("GPS {:3.6f} {:3.6f} {:4.2f}".format(*pack[19:22]))
+                    #print("GPS fix", pack[22])
+                    #print("SCD41", pack[23])
+                    mq4_voltage = pack[24] / 1000.0  # Assuming pack[24] is in millivolts
+                    mq4_ppm = calculate_mq4_ppm(mq4_voltage)
+                    #print("MQ4 Voltage: {:.2f}V".format(mq4_voltage))
+                    #print("me2o2f20", pack[25])
 
                     # отправка json-подобного
                     data_dict = {
@@ -272,7 +292,10 @@ try:
                         "temp_ds18": pack[18] / 16,
                         "gps": {"lat": pack[19], "lon": pack[20], "alt": pack[21], "fix": pack[22]},
                         "scd41": pack[23],
-                        "mq4": pack[24],
+                        "mq4": {
+                        "voltage": pack[24] / 1000.0,  # Assuming pack[24] is in millivolts
+                        "ppm": calculate_mq4_ppm(pack[24] / 1000.0)
+                        },
                         "me2o2": pack[25]
                     }
                     msg = str(data_dict).encode()

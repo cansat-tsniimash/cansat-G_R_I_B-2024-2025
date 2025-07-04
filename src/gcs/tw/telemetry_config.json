@@ -1,0 +1,268 @@
+{
+  "packet_structure": {
+    "format": "<2HIhI6hBHBH4h3fB3HB",
+    "fields": [
+      { "name": "header", "type": "uint16", "index": 0, "description": "Заголовок (0xAAAA)" },
+      { "name": "team_id", "type": "uint16", "index": 1, "description": "ID Команды" },
+      { "name": "time", "type": "uint32", "index": 2, "description": "Время (мс)" },
+      { "name": "temp_bmp", "type": "int16", "index": 3, "scale": 0.01, "description": "Температура BMP (°C)" },
+      { "name": "press_bmp", "type": "uint32", "index": 4, "description": "Давление BMP (Па)" },
+      { "name": "accel_x", "type": "int16", "index": 5, "scale": 0.000488, "description": "Акселерометр X (м/с²)" },
+      { "name": "accel_y", "type": "int16", "index": 6, "scale": 0.000488, "description": "Акселерометр Y (м/с²)" },
+      { "name": "accel_z", "type": "int16", "index": 7, "scale": 0.000488, "description": "Акселерометр Z (м/с²)" },
+      { "name": "gyro_x", "type": "int16", "index": 8, "scale": 0.07, "description": "Гироскоп X (°/с)" },
+      { "name": "gyro_y", "type": "int16", "index": 9, "scale": 0.07, "description": "Гироскоп Y (°/с)" },
+      { "name": "gyro_z", "type": "int16", "index": 10, "scale": 0.07, "description": "Гироскоп Z (°/с)" },
+      { "name": "checksum_org", "type": "uint8", "index": 11, "description": "Контрольная сумма (старая)" },
+      { "name": "packet_num", "type": "uint8", "index": 12, "description": "Номер пакета" },
+      { "name": "state", "type": "uint8", "index": 13, "mask": 7, "description": "Состояние" },
+      { "name": "photo", "type": "int16", "index": 14, "scale": 0.001, "description": "Фоторезистор (лк)" },
+      { "name": "mag_x", "type": "int16", "index": 15, "scale": 0.000584, "description": "Магнитометр X (Гс)" },
+      { "name": "mag_y", "type": "int16", "index": 16, "scale": 0.000584, "description": "Магнитометр Y (Гс)" },
+      { "name": "mag_z", "type": "int16", "index": 17, "scale": 0.000584, "description": "Магнитометр Z (Гс)" },
+      { "name": "temp_ds", "type": "int16", "index": 18, "scale": 0.0625, "description": "Температура DS (°C)" },
+      { "name": "gps_lat", "type": "float32", "index": 19, "description": "Широта GPS" },
+      { "name": "gps_lon", "type": "float32", "index": 20, "description": "Долгота GPS" },
+      { "name": "gps_alt", "type": "float32", "index": 21, "description": "Высота GPS (м)" },
+      { "name": "gps_fix", "type": "uint8", "index": 22, "description": "GPS Fix" },
+      { "name": "scd41", "type": "int16", "index": 23, "description": "SCD41" },
+      { "name": "mq4", "type": "int16", "index": 24, "description": "MQ4" },
+      { "name": "me2o2", "type": "int16", "index": 25, "description": "ME2O2" },
+      { "name": "checksum_grib", "type": "uint8", "index": 26, "description": "Контрольная сумма (новая)" }
+    ]
+  },
+  "telemetry_view": {
+    "fields": [
+      { "label": "№ пакета", "source": "packet_num", "format": "{}" },
+      { "label": "Team ID", "source": "team_id", "format": "{}" },
+      { "label": "Время, мс", "source": "time", "format": "{}" },
+      { "label": "Состояние", "source": "state", "format": "{}" },
+      { "label": "Темп. DS, °C", "source": "temp_ds", "format": "{:.2f}" },
+      { "label": "Темп. BMP, °C", "source": "temp_bmp", "format": "{:.2f}" },
+      { "label": "Давление, Па", "source": "press_bmp", "format": "{:.2f}" },
+      { "label": "Ускор. X, м/с²", "source": "accel_x", "format": "{:.3f}" },
+      { "label": "Ускор. Y, м/с²", "source": "accel_y", "format": "{:.3f}" },
+      { "label": "Ускор. Z, м/с²", "source": "accel_z", "format": "{:.3f}" },
+      { "label": "Угл. скор. X, °/с", "source": "gyro_x", "format": "{:.3f}" },
+      { "label": "Угл. скор. Y, °/с", "source": "gyro_y", "format": "{:.3f}" },
+      { "label": "Угл. скор. Z, °/с", "source": "gyro_z", "format": "{:.3f}" },
+      { "label": "Широта", "source": "gps_lat", "format": "{:.6f}" },
+      { "label": "Долгота", "source": "gps_lon", "format": "{:.6f}" },
+      { "label": "Высота GPS, м", "source": "gps_alt", "format": "{:.2f}" },
+      { "label": "GPS Fix", "source": "gps_fix", "format": "{}" },
+      { "label": "Освещ., лк", "source": "photo", "format": "{:.3f}" },
+      { "label": "Магн. X, Гс", "source": "mag_x", "format": "{:.4f}" },
+      { "label": "Магн. Y, Гс", "source": "mag_y", "format": "{:.4f}" },
+      { "label": "Магн. Z, Гс", "source": "mag_z", "format": "{:.4f}" },
+      { "label": "SCD41", "source": "scd41", "format": "{}" },
+      { "label": "MQ4", "source": "mq4", "format": "{}" },
+      { "label": "me2o2", "source": "me2o2", "format": "{}" }
+    ]
+  },
+  "graphs": [
+    {
+      "name": "temp_ds18",
+      "title": "Темп DS18",
+      "type": "line",
+      "source": "temp_ds",
+      "color": "#ff7f0e",
+      "y_min": -55,
+      "y_max": 125,
+      "position": [0, 0],
+      "size": [1, 1]
+    },
+    {
+      "name": "temp_bmp",
+      "title": "Темп BMP",
+      "type": "line",
+      "source": "temp_bmp",
+      "color": "#e57373",
+      "y_min": -40,
+      "y_max": 85,
+      "position": [0, 1],
+      "size": [1, 1]
+    },
+    {
+      "name": "pressure",
+      "title": "Давление",
+      "type": "line",
+      "source": "press_bmp",
+      "color": "#4fc3f7",
+      "y_min": 30000,
+      "y_max": 110000,
+      "position": [1, 0],
+      "size": [1, 1]
+    },
+    {
+      "name": "accel_x",
+      "title": "Ускорение X",
+      "type": "line",
+      "source": "accel_x",
+      "color": "#ff0000",
+      "y_min": -20,
+      "y_max": 20,
+      "position": [1, 1],
+      "size": [1, 1]
+    },
+    {
+      "name": "accel_y",
+      "title": "Ускорение Y",
+      "type": "line",
+      "source": "accel_y",
+      "color": "#00ff00",
+      "y_min": -20,
+      "y_max": 20,
+      "position": [2, 0],
+      "size": [1, 1]
+    },
+    {
+      "name": "accel_z",
+      "title": "Ускорение Z",
+      "type": "line",
+      "source": "accel_z",
+      "color": "#0000ff",
+      "y_min": -20,
+      "y_max": 20,
+      "position": [2, 1],
+      "size": [1, 1]
+    },
+    {
+      "name": "gyro_x",
+      "title": "Угл. скорость X",
+      "type": "line",
+      "source": "gyro_x",
+      "color": "#ff7f0e",
+       "y_min": -250,
+      "y_max": 250,
+      "position": [3, 0],
+      "size": [1, 1]
+    },
+    {
+      "name": "gyro_y",
+      "title": "Угл. скорость Y",
+      "type": "line",
+      "source": "gyro_y",
+      "color": "#2ca02c",
+       "y_min": -250,
+      "y_max": 250,
+      "position": [3, 1],
+      "size": [1, 1]
+    },
+     {
+      "name": "gyro_z",
+      "title": "Угл. скорость Z",
+      "type": "line",
+      "source": "gyro_z",
+      "color": "#9467bd",
+       "y_min": -250,
+      "y_max": 250,
+      "position": [4, 0],
+      "size": [1, 1]
+    },
+    {
+      "name": "mag_x",
+      "title": "Магнитометр X",
+      "type": "line",
+      "source": "mag_x",
+      "color": "#d62728",
+      "y_min": -2,
+      "y_max": 2,
+      "position": [4, 1],
+      "size": [1, 1]
+    },
+    {
+      "name": "mag_y",
+      "title": "Магнитометр Y",
+      "type": "line",
+      "source": "mag_y",
+      "color": "#17becf",
+      "y_min": -2,
+      "y_max": 2,
+      "position": [5, 0],
+      "size": [1, 1]
+    },
+    {
+      "name": "mag_z",
+      "title": "Магнитометр Z",
+      "type": "line",
+      "source": "mag_z",
+      "color": "#8c564b",
+      "y_min": -2,
+      "y_max": 2,
+      "position": [5, 1],
+      "size": [1, 1]
+    },
+    {
+      "name": "gps_alt",
+      "title": "Высота GPS",
+      "type": "line",
+      "source": "gps_alt",
+      "color": "#7f7f7f",
+      "position": [6, 0],
+      "size": [1, 1]
+    },
+     {
+      "name": "fotores",
+      "title": "Освещенность",
+      "type": "line",
+      "source": "photo",
+      "color": "#bcbd22",
+      "position": [6, 1],
+      "size": [1, 1]
+    },
+    {
+      "name": "mq4",
+      "title": "MQ4",
+      "type": "line",
+      "source": "mq4",
+      "color": "#f06292",
+      "position": [7, 0],
+      "size": [1, 1]
+    },
+    {
+      "name": "scd41",
+      "title": "SCD41",
+      "type": "line",
+      "source": "scd41",
+      "color": "#c0ca33",
+      "position": [7, 1],
+      "size": [1, 1]
+    },
+    {
+      "name": "me2o2",
+      "title": "ME2O2",
+      "type": "line",
+      "source": "me2o2",
+      "color": "#ba68c8",
+      "position": [8, 0],
+      "size": [1, 1]
+    }
+  ],
+  "serial_port": {
+    "port": "COM3",
+    "baudrate": 38400,
+    "timeout": 1
+  },
+  "server": {
+    "host": "172.20.10.4",
+    "port": 5005
+  },
+  "map_settings": {
+    "center_lat": 55.75,
+    "center_lon": 37.62,
+    "zoom": 10,
+    "tile_provider": "OpenStreetMap"
+  },
+  "command_interface": {
+    "enabled": false,
+    "commands": []
+  },
+  "logging": {
+    "log_level": "INFO",
+    "log_file": "telemetry_app.log"
+  },
+  "data_storage": {
+    "database_type": "sqlite",
+    "database_name": "telemetry.db"
+  }
+}
