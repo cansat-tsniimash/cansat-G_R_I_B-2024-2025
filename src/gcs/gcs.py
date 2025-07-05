@@ -343,9 +343,13 @@ def setup_e220():
         
         # Устанавливаем режим 3 (конфигурация)
         print("\nSetting mode 3 (configuration)...")
-        GPIO.output(E220_M0_PIN, GPIO.HIGH)
-        GPIO.output(E220_M1_PIN, GPIO.HIGH)
+        e220_set_mode(3)
         time.sleep(0.5)  # Увеличиваем задержку
+
+        # Проверяем состояние M0 и M1
+        m0_state = GPIO.input(E220_M0_PIN)
+        m1_state = GPIO.input(E220_M1_PIN)
+        print(f"Setting mode M0 state: {m0_state}, M1 state: {m1_state}")
         
         # Проверяем AUX после установки режима
         aux_state = GPIO.input(E220_AUX_PIN)
@@ -367,47 +371,60 @@ def setup_e220():
         # Настройка регистров
         print("\nConfiguring registers...")
         
-        # REG0: Address = 0xFFFF, NetID = 0x00
+        # Address = 0xFFFF
+        print("Setting ADDR REG...")
+        e220_set_adres(0xFFFF)
+        time.sleep(0.5)
+        response = port.read(10)
+        print(f"ADDR REG response: {response.hex() if response else 'None'}")
+
+        # Air rate = 9600, parity = 8N1, prot rate = 9600
         print("Setting REG0...")
-        reg0 = struct.pack(">H", 0xFFFF)
-        port.write(reg0)
+        e220_set_reg0(E220_REG0_AIR_RATE_9600, E220_REG0_PARITY_8N1_DEF, E220_REG0_PORT_RATE_9600)
         time.sleep(0.5)
-        response = port.read(1)
+        response = port.read(10)
         print(f"REG0 response: {response.hex() if response else 'None'}")
-        
-        # REG1: Channel = 0x17, Speed = 0x62 (9600 baud)
+
+        # REG1: packet len = 200, rssi off, power = 22
         print("Setting REG1...")
-        reg1 = struct.pack(">H", 0x1762)
-        port.write(reg1)
+        e220_set_reg1(E220_REG1_PACKET_LEN_200B, E220_REG1_RSSI_OFF, E220_REG1_TPOWER_22)
         time.sleep(0.5)
-        response = port.read(1)
+        response = port.read(10)
         print(f"REG1 response: {response.hex() if response else 'None'}")
-        
-        # REG3: Transmit power = 0x00 (30dBm), FEC = 0x01, WOR = 0x00
-        print("Setting REG3...")
-        reg3 = struct.pack(">H", 0x0001)
-        port.write(reg3)
+
+        # chanel = 1
+        print("Setting CHANNEL...")
+        e220_set_channel(1)
         time.sleep(0.5)
-        response = port.read(1)
+        response = port.read(10)
+        print(f"CHANNEL response: {response.hex() if response else 'None'}")
+
+        # REG3:
+        print("Setting REG3...")
+        e220_set_reg3(
+            E220_REG3_RSSI_BYTE_OFF,
+            E220_REG3_TRANS_M_TRANSPARENT,
+            E220_REG3_LBT_EN_OFF,
+            E220_REG3_WOR_CYCLE_500
+        )
+        time.sleep(0.5)
+        response = port.read(10)
         print(f"REG3 response: {response.hex() if response else 'None'}")
+        
+        # Читаем настройки для проверки
+        print("\nReading current settings...")
+        e220_get_config()
+        #print(f"Current settings: {settings.hex() if settings else 'None'}")
         
         # Возвращаем в режим 0 (передача)
         print("\nSetting mode 0 (transmission)...")
-        GPIO.output(E220_M0_PIN, GPIO.LOW)
-        GPIO.output(E220_M1_PIN, GPIO.LOW)
+        e220_set_mode(0)
         time.sleep(0.5)
         
         # Проверяем AUX после возврата в режим передачи
         aux_state = GPIO.input(E220_AUX_PIN)
         print(f"Final AUX state: {aux_state}")
-        
-        # Читаем настройки для проверки
-        print("\nReading current settings...")
-        port.write(b"\xC1\xC1\xC1")  # Команда чтения настроек
-        time.sleep(0.5)
-        settings = port.read(6)
-        print(f"Current settings: {settings.hex() if settings else 'None'}")
-        
+
         print("\n=== E220 Setup Complete ===")
         return True
     except Exception as e:
