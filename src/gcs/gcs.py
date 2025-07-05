@@ -48,8 +48,8 @@ server_socket.setblocking(False)
 clients = []  # Список подключенных клиентов
 
 # Константы E220
-E220_M0_PIN = 23
-E220_M1_PIN = 24
+E220_M0_PIN = 5
+E220_M1_PIN = 6
 E220_AUX_PIN = 25
 
 E220_REG0_PORT_RATE_1200 = 0
@@ -112,7 +112,7 @@ GPIO.setup(E220_M1_PIN, GPIO.OUT)
 GPIO.setup(E220_AUX_PIN, GPIO.IN)
 
 # Открытие порта
-port = serial.Serial("/dev/ttyUSB1", baudrate=9600, timeout=0.3)
+port = serial.Serial("/dev/ttyRF2", baudrate=9600, timeout=0.3)
 
 # Файлы лога данных
 binfile = f"log/grib_{current_datetime}.bin"

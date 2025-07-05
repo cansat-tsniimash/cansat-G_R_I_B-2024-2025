@@ -163,6 +163,7 @@ void appmain(){
 	piezospeaker_status(0);
 	packet_t packet = {0};
 	packet.start = 0xAAAA;
+	packet.team_id = 0xD9;
 	packet.number_packet = 0;
 	volatile data_t my_data;
 	int16_t temp_gyro[3] = {0}; // temp = ВРЕМЕННО!
