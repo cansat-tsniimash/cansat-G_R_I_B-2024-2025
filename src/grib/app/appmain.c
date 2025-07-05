@@ -162,8 +162,8 @@ void appmain(){
 	int i;
 	piezospeaker_status(0);
 	packet_t packet = {0};
-	packet.start = 0xAAAA;
 	packet.team_id = 0xD9;
+	packet.start = 0xAAAA;
 	packet.number_packet = 0;
 	volatile data_t my_data;
 	int16_t temp_gyro[3] = {0}; // temp = ВРЕМЕННО!
@@ -259,10 +259,12 @@ void appmain(){
 	int lux_cnt = 0;
 
 	uint32_t get_time_burner = HAL_GetTick();
-	#define BURNER_TIME 5000
+	#define BURNER_TIME 3000
 	mission_state_t device_condition = MS_PREPARATION;
 
-	scd41_init();
+	scd41_init(&hi2c1);
+	volatile int time_last = HAL_GetTick();
+	volatile int dt = HAL_GetTick() - time_last;
 
 	while(1){
 		//HAL_Delay(100);
@@ -271,6 +273,9 @@ void appmain(){
 		packet.pressure_bmp280 = data.pressure;
 		packet.temp_bmp280 = data.temperature * 100;
 		float altitude = 44330 * (1- pow(data.pressure/pressure_zero, 1/5.255));
+
+		dt = HAL_GetTick() - time_last;
+		time_last = HAL_GetTick();
 
 		// LSM6DS3
 		my_data.gyro_error = lsm6ds3_angular_rate_raw_get(&lsm, temp_gyro);
@@ -294,7 +299,8 @@ void appmain(){
 			packet.ds18b20 = ds18b20_read_temp(bus);
 			one_wire_start_convertion(bus);
 		}
-
+		dt = HAL_GetTick() - time_last;
+		time_last = HAL_GetTick();
 		/*
 		 * мультиплексор
 		 * (1) - фоторезистор
@@ -308,15 +314,16 @@ void appmain(){
 		megalux(&hadc1, &result);
 		packet.photoresistor = result * 1000;
 		// (2)
-		cd4051_change_ch(5);
+		cd4051_change_ch(4);
 		mq4_ppm(&hadc1, &mq_result);
 		packet.mq_4 = mq_result * 1000;
 
 		// (3)
-		cd4051_change_ch(2);
+		cd4051_change_ch(7);
 		me2o2f20_read(&hadc1, &me2o2_result);
 		packet.me2o2 = me2o2_result * 1000;
-
+		dt = HAL_GetTick() - time_last;
+		time_last = HAL_GetTick();
 	    // scd41
 	    uint16_t co2 = 0;
 		float temp = 0;
@@ -325,14 +332,16 @@ void appmain(){
 	    if(my_data.scd_temp == 0){
 	    	 packet.scd41 = co2;
 	    }
-
+		dt = HAL_GetTick() - time_last;
+		time_last = HAL_GetTick();
 		//neo6mv2
 	    for (i = 0; i < 50; i++)
 	    {
 	    	if (neo6mv2_work())
 	    		break;
 	    }
-
+		dt = HAL_GetTick() - time_last;
+		time_last = HAL_GetTick();
 		GPS_Data gps_data = neo6mv2_GetData();
 		packet.neo6mv2_latitude = gps_data.latitude;
 		packet.neo6mv2_longitude = gps_data.longitude;
@@ -344,7 +353,7 @@ void appmain(){
 	        case MS_PREPARATION:
 	        	if (HAL_GPIO_ReadPin(SWITCH_PORT, SWITCH_PIN) == GPIO_PIN_RESET)
 	        	{
-	        		lux = packet.photoresistor * 0.8;
+	        		lux = packet.photoresistor;
 	        		device_condition = MS_BEFORE_LAYING;
 	        	}
 	            break;
@@ -355,7 +364,7 @@ void appmain(){
 	        	}
 	            break;
 	        case MS_FLIGHT_IN_THE_ROCKET:
-	        	if(packet.photoresistor > lux)
+	        	if((packet.photoresistor > lux) && (altitude >= 100))
 	        	{
 	        		lux_cnt++;
 	        		if(lux_cnt > 2){
