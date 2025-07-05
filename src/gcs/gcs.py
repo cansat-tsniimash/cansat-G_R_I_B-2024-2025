@@ -291,6 +291,7 @@ def e220_set_mode(regim):
 
 def e220_set_reg(adres, data):
     port.write(struct.pack("<4B", 0xC0, adres, 1, data))
+    time.sleep(0.5)
 
 
 def e220_set_adres(adres):
