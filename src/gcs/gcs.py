@@ -7,6 +7,8 @@ import math
 import socket
 import logging
 import sys
+import json
+import time
 
 # Настройка логирования
 current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -41,15 +43,132 @@ def calculate_mq4_ppm(voltage):
     
     return ppm
 
-# Настройка UDP сервера
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-server_socket.bind(('0.0.0.0', 5005))
-server_socket.setblocking(False)
-clients = []  # Список подключенных клиентов
+
+# ===== Добавляем расчёт кислорода =====
+# Параметры АЦП и усилителя
+ADC_REF_VOLTAGE = 3.3    # опорное напряжение АЦП (V)
+ADC_MAX = 4095.0         # разрешение 12-битного АЦП
+
+# Вычислите эти два параметра по вашим измерениям:
+#   V_zero — выход датчика при 0 % O2 (например, в чистом N2)
+#   V_air  — выход датчика при ~21 % O2 (обычный воздух)
+# Тогда:
+#   O2_SLOPE  = (V_air  – V_zero) / 21.0
+#   O2_OFFSET = V_zero
+
+V_zero = 0.175   # В при 0 % O₂
+V_air  = 1.05    # В при ~21 % O₂
+
+O2_SLOPE = (V_air  - V_zero) / 21.0   # заменить на число, полученное по формуле
+O2_OFFSET = V_zero                     # заменить на измеренное напряжение при 0 % O2
+
+def calculate_o2_percent(voltage: float) -> float:
+    """
+    Переводим входное напряжение в % кислорода и ограничиваем в диапазоне 0–100%.
+    """
+    perc = (voltage - O2_OFFSET) / O2_SLOPE
+    # Логируем для отладки: «сырое» АЦП, напряжение, рассчитанный %
+    logging.debug(
+        "O2 raw ADC=%d, voltage=%.3f V → perc=%.2f%%",
+        raw_me2o2, voltage, perc
+    )
+    # Предотвращаем «взлет» значения за границы физических возможных
+    if perc < 0.0 or perc > 100.0:
+        logging.warning("O2 out of bounds: %.2f%% → clamped", perc)
+    return max(0.0, min(100.0, perc))
+# ======================================
+
+class UDPServer:
+    def __init__(self, host='0.0.0.0', port=5005):
+        self.host = host
+        self.port = port
+        self.socket = None
+        self.clients = []
+        self.last_check = time.time()
+        self.create_socket()
+
+    def create_socket(self):
+        try:
+            if self.socket:
+                try:
+                    self.socket.close()
+                except:
+                    pass
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.socket.bind((self.host, self.port))
+            self.socket.setblocking(False)
+            print("\n=== UDP Server Started ===")
+            print(f"Listening on {self.host}:{self.port}")
+            return True
+        except Exception as e:
+            print(f"ERROR: Failed to create UDP socket: {e}")
+            self.socket = None
+            return False
+
+    def handle_client(self, data, addr):
+        if addr not in self.clients:
+            self.clients.append(addr)
+            print(f"\nNew UDP client connected: {addr}")
+            print(f"Total clients: {len(self.clients)}")
+        
+        if data == b"status":
+            try:
+                self.send_data(b"OK", addr)
+                print(f"Sent status response to {addr}")
+            except Exception as e:
+                print(f"ERROR: Failed to send status response: {e}")
+        else:
+            try:
+                json_data = json.loads(data.decode('utf-8'))
+                print(f"Received JSON data from {addr}: {json_data}")
+            except json.JSONDecodeError:
+                print(f"Received non-JSON data from {addr}: {data}")
+            except Exception as e:
+                print(f"ERROR: Failed to process data from {addr}: {e}")
+
+    def send_data(self, data, addr=None):
+        if not self.socket:
+            if not self.create_socket():
+                return False
+        
+        try:
+            if addr:
+                self.socket.sendto(data, addr)
+            else:
+                active_clients = []
+                for client in self.clients:
+                    try:
+                        self.socket.sendto(data, client)
+                        print(f"Sent to client: {client}")
+                        active_clients.append(client)
+                    except Exception as e:
+                        print(f"ERROR: Failed to send to client {client}: {e}")
+                self.clients = active_clients
+            return True
+        except Exception as e:
+            print(f"ERROR: Failed to send data: {e}")
+            self.socket = None
+            return False
+
+    def check_clients(self):
+        if time.time() - self.last_check > 5:
+            active_clients = []
+            for client in self.clients:
+                try:
+                    if self.send_data(b"ping", client):
+                        active_clients.append(client)
+                except:
+                    pass
+            self.clients = active_clients
+            print(f"Active UDP clients: {len(self.clients)}")
+            self.last_check = time.time()
+
+# Создаем экземпляр UDP сервера
+udp_server = UDPServer()
 
 # Константы E220
-E220_M0_PIN = 5
-E220_M1_PIN = 6
+E220_M0_PIN = 6
+E220_M1_PIN = 5
 E220_AUX_PIN = 25
 
 E220_REG0_PORT_RATE_1200 = 0
@@ -105,14 +224,30 @@ E220_REG3_WOR_CYCLE_3500 = 6
 E220_REG3_WOR_CYCLE_4000 = 7
 
 # Инициализация GPIO
-GPIO.cleanup()
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(E220_M0_PIN, GPIO.OUT)
-GPIO.setup(E220_M1_PIN, GPIO.OUT)
-GPIO.setup(E220_AUX_PIN, GPIO.IN)
+try:
+    GPIO.cleanup()
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(E220_M0_PIN, GPIO.OUT)
+    GPIO.setup(E220_M1_PIN, GPIO.OUT)
+    GPIO.setup(E220_AUX_PIN, GPIO.IN)
+    logging.info("GPIO initialized successfully")
+except Exception as e:
+    logging.error("GPIO initialization failed: %s", e)
+    sys.exit(1)
 
 # Открытие порта
-port = serial.Serial("/dev/ttyRF2", baudrate=9600, timeout=0.3)
+try:
+    port = serial.Serial("/dev/ttyRF2", baudrate=9600, timeout=0.3)
+    if not port.is_open:
+        port.open()
+    logging.info("Serial port opened successfully")
+except Exception as e:
+    logging.error("Failed to open serial port: %s", e)
+    sys.exit(1)
+
+# Проверяем состояние AUX пина перед настройкой
+aux_state = GPIO.input(E220_AUX_PIN)
+logging.info("Initial AUX pin state: %d", aux_state)
 
 # Файлы лога данных
 binfile = f"log/grib_{current_datetime}.bin"
@@ -156,7 +291,6 @@ def e220_set_mode(regim):
 
 def e220_set_reg(adres, data):
     port.write(struct.pack("<4B", 0xC0, adres, 1, data))
-    sleep(1)
 
 
 def e220_set_adres(adres):
@@ -193,127 +327,265 @@ def e220_get_config():
             struct.unpack("<3BH7B", recv[:12])
         )
 
-# Начальная настройка модуля
-logging.info("Configuring E220 module...")
-e220_set_mode(3)
-e220_set_adres(0xFFFF)
-sleep(1)
-e220_set_reg0(E220_REG0_AIR_RATE_9600, E220_REG0_PARITY_8N1_DEF, E220_REG0_PORT_RATE_9600)
-sleep(1)
-e220_set_reg1(E220_REG1_PACKET_LEN_200B, E220_REG1_RSSI_OFF, E220_REG1_TPOWER_22)
-sleep(1)
-e220_set_channel(1)
-sleep(1)
-e220_set_reg3(
-    E220_REG3_RSSI_BYTE_OFF,
-    E220_REG3_TRANS_M_TRANSPARENT,
-    E220_REG3_LBT_EN_OFF,
-    E220_REG3_WOR_CYCLE_500
-)
-sleep(1)
-recv = port.read(1500)
-e220_get_config()
-e220_set_mode(0)
+def setup_e220():
+    try:
+        print("\n=== E220 Module Setup ===")
+        print("Checking initial state...")
+        
+        # Проверяем начальное состояние AUX
+        aux_state = GPIO.input(E220_AUX_PIN)
+        print(f"Initial AUX state: {aux_state}")
+        
+        # Проверяем состояние M0 и M1
+        m0_state = GPIO.input(E220_M0_PIN)
+        m1_state = GPIO.input(E220_M1_PIN)
+        print(f"Initial M0 state: {m0_state}, M1 state: {m1_state}")
+        
+        # Устанавливаем режим 3 (конфигурация)
+        print("\nSetting mode 3 (configuration)...")
+        GPIO.output(E220_M0_PIN, GPIO.HIGH)
+        GPIO.output(E220_M1_PIN, GPIO.HIGH)
+        time.sleep(0.5)  # Увеличиваем задержку
+        
+        # Проверяем AUX после установки режима
+        aux_state = GPIO.input(E220_AUX_PIN)
+        print(f"AUX state after mode change: {aux_state}")
+        
+        if aux_state == 0:
+            print("WARNING: AUX is LOW after mode change - module might be busy")
+            time.sleep(0.5)  # Увеличиваем задержку
+        
+        # Очищаем буферы
+        print("\nClearing buffers...")
+        port.reset_input_buffer()
+        port.reset_output_buffer()
+        
+        # Проверяем состояние порта
+        print(f"Port is open: {port.is_open}")
+        print(f"Port settings: {port.get_settings()}")
+        
+        # Настройка регистров
+        print("\nConfiguring registers...")
+        
+        # REG0: Address = 0xFFFF, NetID = 0x00
+        print("Setting REG0...")
+        reg0 = struct.pack(">H", 0xFFFF)
+        port.write(reg0)
+        time.sleep(0.5)
+        response = port.read(1)
+        print(f"REG0 response: {response.hex() if response else 'None'}")
+        
+        # REG1: Channel = 0x17, Speed = 0x62 (9600 baud)
+        print("Setting REG1...")
+        reg1 = struct.pack(">H", 0x1762)
+        port.write(reg1)
+        time.sleep(0.5)
+        response = port.read(1)
+        print(f"REG1 response: {response.hex() if response else 'None'}")
+        
+        # REG3: Transmit power = 0x00 (30dBm), FEC = 0x01, WOR = 0x00
+        print("Setting REG3...")
+        reg3 = struct.pack(">H", 0x0001)
+        port.write(reg3)
+        time.sleep(0.5)
+        response = port.read(1)
+        print(f"REG3 response: {response.hex() if response else 'None'}")
+        
+        # Возвращаем в режим 0 (передача)
+        print("\nSetting mode 0 (transmission)...")
+        GPIO.output(E220_M0_PIN, GPIO.LOW)
+        GPIO.output(E220_M1_PIN, GPIO.LOW)
+        time.sleep(0.5)
+        
+        # Проверяем AUX после возврата в режим передачи
+        aux_state = GPIO.input(E220_AUX_PIN)
+        print(f"Final AUX state: {aux_state}")
+        
+        # Читаем настройки для проверки
+        print("\nReading current settings...")
+        port.write(b"\xC1\xC1\xC1")  # Команда чтения настроек
+        time.sleep(0.5)
+        settings = port.read(6)
+        print(f"Current settings: {settings.hex() if settings else 'None'}")
+        
+        print("\n=== E220 Setup Complete ===")
+        return True
+    except Exception as e:
+        print(f"ERROR: E220 setup failed: {e}")
+        return False
 
-logging.info("Entering main loop")
-buf = b""
+# Начальная настройка модуля
+print("\n=== Starting E220 Configuration ===")
+if not setup_e220():
+    print("ERROR: Failed to configure E220 module. Exiting...")
+    sys.exit(1)
+
+# Основной цикл
 try:
+    # Инициализация буфера
+    buf = bytearray()
+    print("\n=== Starting main loop ===")
+    print("Waiting for UART data...")
+
     while True:
-        # UDP: прием от клиентов
+        # UDP: проверка новых клиентов
         try:
-            data, addr = server_socket.recvfrom(1024)
-            if addr not in clients:
-                clients.append(addr)
-                logging.info("New client: %s", addr)
-            if data == b"status":
-                server_socket.sendto(b"OK", addr)
-                logging.info("Status OK sent to %s", addr)
-        except BlockingIOError:
-            pass
+            if udp_server.socket:
+                data, addr = udp_server.socket.recvfrom(1024)
+                udp_server.handle_client(data, addr)
+        except socket.error as e:
+            if e.errno != socket.EAGAIN:
+                print(f"ERROR: UDP receive error: {e}")
+                udp_server.create_socket()
 
         # UART: чтение данных
-        rcv = port.read(100)
-        if rcv:
-            aux_state = GPIO.input(E220_AUX_PIN)
-            logging.debug("AUX state: %d", aux_state)
-            file_bin.write(rcv)
-            file_bin.flush()
-            buf += rcv
-
-            # ретрансляция сырого
-            for client in clients:
-                server_socket.sendto(rcv, client)
+        try:
+            print("\nTrying to read UART...")
+            rcv = port.read(100)
+            print(f"Read result: {rcv.hex() if rcv else 'No data'}")
+            if rcv:
+                aux_state = GPIO.input(E220_AUX_PIN)
+                print(f"AUX state: {aux_state}")
+                print(f"Buffer size before adding: {len(buf)}")
+                buf += rcv
+                print(f"Buffer size after adding: {len(buf)}")
+                print(f"Current buffer content: {buf.hex()}")
+                file_bin.write(rcv)
+                file_bin.flush()
+            else:
+                # Проверяем состояние порта
+                if not port.is_open:
+                    print("ERROR: Serial port is closed!")
+                    try:
+                        port.open()
+                        print("Serial port reopened")
+                    except Exception as e:
+                        print(f"ERROR: Failed to reopen serial port: {e}")
+                # Проверяем AUX пин
+                aux_state = GPIO.input(E220_AUX_PIN)
+                if aux_state == 0:
+                    print("WARNING: AUX pin is LOW - module might be busy")
+        except serial.SerialException as e:
+            print(f"ERROR: Serial port error: {e}")
+            try:
+                port.close()
+                port.open()
+                print("Serial port reopened")
+            except Exception as e:
+                print(f"ERROR: Failed to reopen serial port: {e}")
+        except Exception as e:
+            print(f"ERROR: UART read error: {e}")
 
         # обработка пакетов
         while len(buf) >= 60:
+            print("\n=== Processing packet ===")
+            print(f"Buffer size: {len(buf)}")
+            print(f"First 10 bytes: {buf[:10].hex()}")
             if buf[0] == 0xAA and buf[1] == 0xAA:
-                pack = struct.unpack("<2HIhI6hBHBH4h3fB3HB", buf[:60])
-                if xor_block(buf[:59]) == pack[26]:
-                    # запись CSV
-                    file_csv.write(";".join(str(x) for x in pack) + ";")
-                    file_csv.flush()
+                print("Found packet header!")
+                chunk = buf[:60]
+                print(f"Processing chunk: {chunk.hex()}")
+                try:
+                    pack = struct.unpack("<2HIhI6hBHBH4h3fB3HB", chunk)
+                    print(f"Unpacked packet: {pack}")
+                except struct.error as e:
+                    print(f"ERROR: Struct unpack error: {e}. Skipping byte.")
+                    buf = buf[1:]
+                    continue
 
-                    # расчёты
-                    accel = [num * 488 / 1000 / 1000 for num in pack[5:8]]
-                    gyro = [num * 70 / 1000 for num in pack[8:11]]
-                    magnet = [num / 1711 for num in pack[15:18]]
+                calculated_crc = xor_block(chunk[:-1])
+                received_crc = pack[-1]
+                print(f"CRC check - Calculated: {calculated_crc}, Received: {received_crc}")
 
-                    # вывод в консоль
-                    print("Контрольная сумма сошлась")
-                    print("Н.пакета", pack[12])
-                    print("Время:", pack[2])
-                    #print("Темп BMP", pack[3] / 100)
-                    #print("Давл BMP", pack[4])
-                    #print("Ускор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*accel))
-                    #print("Угл.скор LSM6D {:4.2f} {:4.2f} {:4.2f}".format(*gyro))
-                    print("Сост.апарт", pack[13] & 0x07)
-                    print("Фото.рез {:2.2f}".format(pack[14] / 1000))
-                    #print("Магнит.поле {:4.2f} {:4.2f} {:4.2f}".format(*magnet))
-                    #print("Темп DS18 {:4.2f}".format(pack[18] / 16))
-                    #print("GPS {:3.6f} {:3.6f} {:4.2f}".format(*pack[19:22]))
-                    #print("GPS fix", pack[22])
-                    #print("SCD41", pack[23])
-                    mq4_voltage = pack[24] / 1000.0  # Assuming pack[24] is in millivolts
-                    mq4_ppm = calculate_mq4_ppm(mq4_voltage)
-                    #print("MQ4 Voltage: {:.2f}V".format(mq4_voltage))
-                    #print("me2o2f20", pack[25])
-
-                    # отправка json-подобного
-                    data_dict = {
-                        "packet": pack[12],
-                        "time": pack[2],
-                        "temp_bmp": pack[3] / 100,
-                        "pressure": pack[4],
-                        "accel": accel,
-                        "gyro": gyro,
-                        "state": pack[13] & 0x07,
-                        "photores": pack[14] / 1000,
-                        "magnet": magnet,
-                        "temp_ds18": pack[18] / 16,
-                        "gps": {"lat": pack[19], "lon": pack[20], "alt": pack[21], "fix": pack[22]},
-                        "scd41": pack[23],
-                        "mq4": {
-                        "voltage": pack[24] / 1000.0,  # Assuming pack[24] is in millivolts
-                        "ppm": calculate_mq4_ppm(pack[24] / 1000.0)
-                        },
-                        "me2o2": pack[25]
+                if calculated_crc == received_crc:
+                    raw_me2o2 = pack[25]      # «сырое» значение АЦП
+                    voltage_o2 = raw_me2o2 / ADC_MAX * ADC_REF_VOLTAGE
+                    me2o2_o2 = round(calculate_o2_percent(voltage_o2), 1)
+                    data = {
+                        "header": int(pack[0]),
+                        "team_id": int(pack[1]),
+                        "time": int(pack[2]),
+                        "temp_bmp": float(pack[3] * 0.01),
+                        "press_bmp": int(pack[4]),
+                        "accel_x": float(pack[5] * 0.000488),
+                        "accel_y": float(pack[6] * 0.000488),
+                        "accel_z": float(pack[7] * 0.000488),
+                        "gyro_x": float(pack[8] * 0.07),
+                        "gyro_y": float(pack[9] * 0.07),
+                        "gyro_z": float(pack[10] * 0.07),
+                        "checksum_org": int(pack[11]),
+                        "packet_num": int(pack[12]),
+                        "state": int(pack[13] & 7),
+                        "photo": float(pack[14] * 0.001),
+                        "mag_x": float(pack[15] * 0.000584),
+                        "mag_y": float(pack[16] * 0.000584),
+                        "mag_z": float(pack[17] * 0.000584),
+                        "temp_ds": float(pack[18] * 0.0625),
+                        "gps_lat": float(pack[19]),
+                        "gps_lon": float(pack[20]),
+                        "gps_alt": float(pack[21]),
+                        "gps_fix": int(pack[22]),
+                        "scd41": int(pack[23]),
+                        "mq4": int(pack[24]),
+                        "me2o2": float(me2o2_o2),
+                        "checksum_grib": int(pack[26])
                     }
-                    msg = str(data_dict).encode()
-                    for client in clients:
-                        server_socket.sendto(msg, client)
+                    print(f"Processed data: {data}")
+
+                    try:
+                        # Преобразуем все значения в базовые типы Python
+                        json_string = json.dumps(data, ensure_ascii=False)
+                        print(f"JSON string: {json_string}")
+                        udp_message = json_string.encode('utf-8')
+                        print(f"UDP message (hex): {udp_message.hex()}")
+                        print(f"Sending UDP message to {len(udp_server.clients)} clients")
+                        udp_server.send_data(udp_message)
+                    except Exception as e:
+                        print(f"ERROR: Failed to send JSON UDP packet: {e}")
+                        print(f"Data that caused error: {data}")
 
                     buf = buf[60:]
                 else:
-                    logging.warning("Bad checksum, discard byte")
+                    print(f"WARNING: CRC mismatch! Calculated: {calculated_crc}, Received: {received_crc}")
                     buf = buf[1:]
             else:
-            	buf = buf[1:]
+                # Ищем следующий заголовок
+                header_index = buf.find(b"\xAA\xAA")
+                if header_index != -1:
+                    print(f"Found header at index {header_index}, skipping {header_index} bytes")
+                    buf = buf[header_index:]
+                else:
+                    # Если заголовок не найден, оставляем только последний байт
+                    buf = buf[-1:]
+
+        # Проверяем активных клиентов
+        udp_server.check_clients()
+
 except KeyboardInterrupt:
-    logging.info("User interrupted")
+    print("\nUser interrupted")
 finally:
-    logging.info("Cleanup and exit")
-    file_bin.close()
-    file_csv.close()
-    port.close()
-    server_socket.close()
-    GPIO.cleanup()
+    # Очистка
+    print("\nCleaning up...")
+    try:
+        port.close()
+        print("Serial port closed")
+    except:
+        pass
+    try:
+        if udp_server.socket:
+            udp_server.socket.close()
+        print("UDP socket closed")
+    except:
+        pass
+    try:
+        file_bin.close()
+        file_csv.close()
+        print("Log files closed")
+    except:
+        pass
+    try:
+        GPIO.cleanup()
+        print("GPIO cleaned up")
+    except:
+        pass
+    print("Cleanup complete")
